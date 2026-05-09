@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kindle Forge</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Kindle Basic 11</p>
+          <h1>Kindle Forge</h1>
+        </div>
+        <div class="top-actions">
+          <a class="ghost-link" href="https://www.amazon.com/sendtokindle" target="_blank" rel="noreferrer">Send to Kindle</a>
+          <button id="openRootButton" class="icon-button" type="button" title="Abrir pasta de saida">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+          </button>
+          <div class="profile-pill">1072 x 1448</div>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="Conversor Kindle">
+        <form id="convertForm" class="panel control-panel">
+          <section>
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Entrada</p>
+                <h2>Arquivos ou pasta</h2>
+              </div>
+              <button id="folderButton" class="secondary-button" type="button">Escolher pasta</button>
+            </div>
+
+            <div id="dropZone" class="drop-zone" tabindex="0">
+              <input id="fileInput" name="file" type="file" multiple accept=".pdf,.cbz,.cbr,.zip,.rar,.7z,.cb7,.epub,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff" />
+              <input id="folderInput" type="file" webkitdirectory directory multiple hidden />
+              <div class="drop-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="img">
+                  <path d="M12 3v11m0-11 4 4m-4-4-4 4M5 14v4a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-4" />
+                </svg>
+              </div>
+              <div>
+                <strong id="fileLabel">Arraste arquivos, CBR/CBZ/PDF ou uma pasta</strong>
+                <span id="fileMeta">Mangás, HQs, manhwas, PDFs e imagens</span>
+              </div>
+            </div>
+            <div id="fileList" class="file-list" hidden></div>
+            <div id="fileOrderTools" class="file-order-tools" hidden>
+              <button id="sortFilesButton" class="secondary-button small-button" type="button">Ordenar por nome</button>
+              <button id="reverseFilesButton" class="secondary-button small-button" type="button">Inverter ordem</button>
+              <button id="mergePdfsButton" class="secondary-button small-button" type="button">Mesclar PDFs</button>
+            </div>
+          </section>
+
+          <section>
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Presets</p>
+                <h2>Tipo de leitura</h2>
+              </div>
+            </div>
+            <div class="preset-grid">
+              <button type="button" class="preset-button active" data-preset="manga">Mangá P&B</button>
+              <button type="button" class="preset-button" data-preset="comic">HQ colorida</button>
+              <button type="button" class="preset-button" data-preset="webtoon">Webtoon vertical</button>
+              <button type="button" class="preset-button" data-preset="pdf">Scan/PDF</button>
+              <button type="button" class="preset-button" data-preset="quality">Qualidade máxima</button>
+              <button type="button" class="preset-button" data-preset="light">Tamanho reduzido</button>
+              <button type="button" class="preset-button" data-preset="auto">Detectar automaticamente</button>
+            </div>
+            <input id="modeInput" name="mode" type="hidden" value="manga" />
+          </section>
+
+          <section>
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Organização</p>
+                <h2>Capítulos e volumes</h2>
+              </div>
+            </div>
+            <div class="organize-grid">
+              <label><input type="radio" name="groupMode" value="batch" checked /> Cada arquivo vira livro</label>
+              <label><input type="radio" name="groupMode" value="volume" /> Um volume com capítulos</label>
+              <label><input type="radio" name="groupMode" value="chapters" /> Pasta de capítulo/imagens</label>
+            </div>
+          </section>
+
+          <section class="metadata-grid">
+            <label class="field">
+              <span>Título</span>
+              <input id="titleInput" name="title" type="text" placeholder="Usar nome do arquivo" />
+            </label>
+            <label class="field">
+              <span>Autor</span>
+              <input name="author" type="text" value="Unknown" />
+            </label>
+            <label class="field">
+              <span>Série</span>
+              <input name="series" type="text" placeholder="Opcional" />
+            </label>
+            <label class="field">
+              <span>Volume</span>
+              <input name="volume" type="text" placeholder="01" />
+            </label>
+            <label class="field">
+              <span>Editora</span>
+              <input name="publisher" type="text" placeholder="Opcional" />
+            </label>
+            <label class="field">
+              <span>Idioma</span>
+              <input name="language" type="text" value="pt-BR" />
+            </label>
+            <label class="field wide">
+              <span>Descrição</span>
+              <textarea name="description" rows="3" placeholder="Sinopse, arco, coleção ou observações"></textarea>
+            </label>
+            <input id="coverUrlInput" name="coverUrl" type="hidden" />
+            <div class="metadata-actions">
+              <select id="metadataKind">
+                <option value="auto">Tipo: automático</option>
+                <option value="manga">Mangá</option>
+                <option value="comic">Comic/HQ</option>
+                <option value="book">Livro</option>
+                <option value="lightnovel">Light novel</option>
+              </select>
+              <select id="metadataLanguage">
+                <option value="">Idioma: qualquer</option>
+                <option value="pt-BR">Português</option>
+                <option value="en">Inglês</option>
+                <option value="ja">Japonês</option>
+              </select>
+              <button id="metadataButton" class="secondary-button" type="button">Buscar metadados</button>
+              <span id="metadataHint">Busca em MangaDex, Google Books e Open Library</span>
+            </div>
+            <div id="metadataResults" class="metadata-results" hidden></div>
+          </section>
+
+          <section class="cover-section">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Capa</p>
+                <h2>Imagem do livro</h2>
+              </div>
+            </div>
+            <div class="cover-grid">
+              <label><input type="radio" name="coverMode" value="first" checked /> Primeira página</label>
+              <label><input type="radio" name="coverMode" value="generated" /> Gerar capa</label>
+              <label><input type="radio" name="coverMode" value="custom" /> Usar imagem</label>
+              <label><input type="radio" name="coverMode" value="online" /> Capa online</label>
+              <label><input type="radio" name="coverMode" value="none" /> Sem capa extra</label>
+            </div>
+            <label class="cover-picker">
+              <input id="coverInput" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff" />
+              <span id="coverLabel">Escolher capa personalizada</span>
+            </label>
+          </section>
+
+          <section>
+            <div class="settings-grid">
+              <fieldset class="check-grid">
+                <legend>Saída</legend>
+                <label><input type="checkbox" name="format" value="epub" checked /> EPUB</label>
+                <label><input type="checkbox" name="format" value="cbz" /> CBZ</label>
+                <label><input type="checkbox" name="format" value="pdf" /> PDF</label>
+              </fieldset>
+              <label class="field split-field">
+                <span>Dividir acima de</span>
+                <input id="splitSizeInput" name="splitSizeMb" type="number" min="0" max="2000" value="200" />
+              </label>
+            </div>
+
+            <div class="slider-row">
+              <label for="qualityInput">Qualidade</label>
+              <input id="qualityInput" name="quality" type="range" min="55" max="95" value="85" />
+              <output id="qualityValue">85</output>
+            </div>
+
+            <div class="slider-row">
+              <label for="gammaInput">Gamma</label>
+              <input id="gammaInput" name="gamma" type="range" min="0.75" max="1.25" step="0.05" value="1" />
+              <output id="gammaValue">1.00</output>
+            </div>
+
+            <div class="toggle-grid">
+              <label><input type="checkbox" name="crop" checked /> Cortar margens</label>
+              <label><input id="splitInput" type="checkbox" name="splitSpreads" checked /> Dividir página dupla</label>
+              <label><input id="protectFirstInput" type="checkbox" name="protectFirstPage" checked /> Preservar capa dupla</label>
+              <label><input type="checkbox" name="dither" /> Dither</label>
+              <label><input type="checkbox" name="color" /> Manter cor</label>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button id="previewButton" class="secondary-button" type="button">Gerar prévia</button>
+            <button id="convertButton" class="primary-button" type="submit">
+              <span>Converter</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m0 0-5-5m5 5-5 5" /></svg>
+            </button>
+          </div>
+        </form>
+
+        <aside class="side-column">
+          <section class="panel result-panel" aria-live="polite">
+            <div class="status-head">
+              <div>
+                <p class="eyebrow">Resultado</p>
+                <h2 id="statusTitle">Pronto</h2>
+              </div>
+              <div id="statusDot" class="status-dot idle"></div>
+            </div>
+
+            <div class="progress-list" id="progressList" hidden></div>
+
+            <div class="preview-panel">
+              <div class="preview-toolbar">
+                <div>
+                  <strong id="previewTitle">Prévia</strong>
+                  <span id="previewDetail">Aguardando arquivo</span>
+                </div>
+                <div class="preview-actions">
+                  <button id="prevPreviewButton" type="button" title="Página anterior">‹</button>
+                  <button id="zoomPreviewButton" type="button" title="Zoom">Zoom</button>
+                  <button id="nextPreviewButton" type="button" title="Próxima página">›</button>
+                </div>
+              </div>
+              <div id="previewGrid" class="preview-grid">
+                <div class="kindle-frame">
+                  <div class="kindle-screen"><span>Prévia</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div id="resultList" class="result-list" hidden></div>
+            <p id="messageBox" class="message-box"></p>
+          </section>
+
+          <section class="panel library-panel">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Biblioteca</p>
+                <h2>Histórico local</h2>
+              </div>
+              <div class="library-actions">
+                <button id="clearHistoryButton" class="secondary-button small-button" type="button">Limpar</button>
+                <button id="deleteFilesButton" class="danger-button small-button" type="button">Apagar arquivos</button>
+                <button id="refreshHistoryButton" class="icon-button" type="button" title="Atualizar histórico">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" /></svg>
+                </button>
+              </div>
+            </div>
+            <div id="historyList" class="history-list"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <script src="/app.js?v=0.3"></script>
+  </body>
+</html>

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kindle-forge"
+version = "0.1.0"
+description = "Convert comics, manga, manhwa, PDFs, CBZ and CBR files for Kindle Basic 11th generation."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Kindle Forge" }]
+dependencies = [
+  "Pillow>=10.0",
+  "PyMuPDF>=1.24",
+]
+
+[project.scripts]
+kindle-forge = "kindle_forge.cli:main"
+kindle-forge-web = "kindle_forge.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
