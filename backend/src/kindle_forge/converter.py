@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,10 +60,11 @@ def convert(request: ConvertRequest) -> ConvertResult:
     input_path = request.input_path.expanduser().resolve()
     output_dir = request.output_dir.expanduser().resolve()
     title = request.title or input_path.stem
-    base_name = slugify(title)
+    display_title = _title_with_volume(title, request.volume)
+    base_name = slugify(filename_title_with_volume(title, request.volume))
     mode = detect_mode(input_path, request.profile, request.pdf_zoom) if request.mode == "auto" else request.mode
     metadata = BookMetadata(
-        title=title,
+        title=display_title,
         author=request.author,
         series=request.series,
         volume=request.volume,
@@ -134,7 +136,7 @@ def convert(request: ConvertRequest) -> ConvertResult:
                 outputs.append(
                     write_epub(
                         chunk,
-                        output_dir / _part_name(base_name, index, len(chunks), ".epub"),
+                        _available_output_path(output_dir / _part_name(base_name, index, len(chunks), ".epub")),
                         metadata=part_metadata,
                         profile=request.profile,
                         rtl=mode == "manga",
@@ -143,12 +145,22 @@ def convert(request: ConvertRequest) -> ConvertResult:
                 )
         if "cbz" in formats:
             for index, chunk in enumerate(chunks, start=1):
-                outputs.append(write_cbz(chunk, output_dir / _part_name(base_name, index, len(chunks), ".cbz")))
+                outputs.append(
+                    write_cbz(
+                        chunk,
+                        _available_output_path(output_dir / _part_name(base_name, index, len(chunks), ".cbz")),
+                    )
+                )
         if "pdf" in formats:
             for index, chunk in enumerate(chunks, start=1):
-                outputs.append(write_pdf(chunk, output_dir / _part_name(base_name, index, len(chunks), ".pdf")))
+                outputs.append(
+                    write_pdf(
+                        chunk,
+                        _available_output_path(output_dir / _part_name(base_name, index, len(chunks), ".pdf")),
+                    )
+                )
 
-        return ConvertResult(title=title, page_count=len(page_paths), outputs=outputs, mode=mode, split=split_happened)
+        return ConvertResult(title=display_title, page_count=len(page_paths), outputs=outputs, mode=mode, split=split_happened)
 
 
 def _expand_formats(output_format: str) -> set[str]:
@@ -203,6 +215,54 @@ def _part_name(base_name: str, index: int, total: int, suffix: str) -> str:
     if total == 1:
         return f"{base_name}{suffix}"
     return f"{base_name}-Parte-{index}{suffix}"
+
+
+def _available_output_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    index = 2
+    while True:
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def filename_title_with_volume(title: str, volume: str) -> str:
+    clean_volume = _clean_volume(volume)
+    if not clean_volume or _title_already_has_volume(title, volume):
+        return title
+    return f"{title} Vol {clean_volume}"
+
+
+def _title_with_volume(title: str, volume: str) -> str:
+    volume_label = _volume_label(volume)
+    if not volume_label or _title_already_has_volume(title, volume):
+        return title
+    return f"{title} - {volume_label}"
+
+
+def _volume_label(volume: str) -> str:
+    clean_volume = _clean_volume(volume)
+    return f"Vol. {clean_volume}" if clean_volume else ""
+
+
+def _clean_volume(volume: str) -> str:
+    clean = volume.strip()
+    clean = re.sub(r"^(?:vol(?:ume)?\.?|v)\s*", "", clean, flags=re.I).strip()
+    return clean
+
+
+def _title_already_has_volume(title: str, volume: str) -> bool:
+    clean_volume = _clean_volume(volume)
+    if not clean_volume:
+        return False
+    if clean_volume.isdigit():
+        number_pattern = f"0*{int(clean_volume)}"
+    else:
+        number_pattern = re.escape(clean_volume)
+    pattern = rf"\b(?:vol(?:ume)?\.?|v)\s*{number_pattern}\b"
+    return re.search(pattern, title, flags=re.I) is not None
 
 
 def detect_mode(input_path: Path, profile: DeviceProfile, pdf_zoom: float = 1.0) -> str:

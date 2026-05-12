@@ -1,6 +1,6 @@
 # Kindle Forge
 
-Conversor visual local para preparar **PDF, CBZ, CBR, ZIP, RAR, 7Z, EPUB com imagens e imagens soltas** para o **Kindle Basic 11ª geração**.
+Conversor visual local para preparar **PDF, CBZ, CBR, ZIP, RAR, 7Z, EPUB com imagens e imagens soltas** para **Kindle, Kobo, PocketBook, Nook, Sony, e-readers genéricos e tablets**.
 
 ## Pastas
 
@@ -132,4 +132,4 @@ PYTHONPATH=src python -m unittest discover -s tests
 
 ## Observações
 
-O perfil padrão é **1072 x 1448 px**, 300 ppi e 16 tons de cinza. O projeto não remove DRM; use apenas arquivos seus, DRM-free ou que você tenha direito de converter.
+O perfil padrão continua sendo **Kindle Basic 11 · 1072 x 1448 px**, mas a interface também permite escolher outros leitores. O projeto não remove DRM; use apenas arquivos seus, DRM-free ou que você tenha direito de converter.

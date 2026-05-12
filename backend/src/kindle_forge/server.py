@@ -6,6 +6,7 @@ import io
 import json
 import mimetypes
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,7 +16,8 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
+from zipfile import ZipFile
 
 from .converter import ConvertRequest, convert, detect_mode
 from .covers import BookMetadata, make_generated_cover, prepare_cover_image
@@ -91,6 +93,7 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
                 return
 
             profile = get_profile(_field(form, "profile", "kindle11"))
+            profile_label = _field(form, "profileLabel", profile.label).strip() or profile.label
             output_format = _field(form, "format", "epub")
             requested_mode = _field(form, "mode", "manga")
             author = _field(form, "author", "Unknown").strip() or "Unknown"
@@ -117,47 +120,51 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
             results: list[dict[str, Any]] = []
             for group_index, group in enumerate(input_groups, start=1):
                 title = _title_for_group(form, group, group_index, len(input_groups))
-                job_id = _unique_job_id(slugify(title, "conversion"))
+                job_id = _collection_id(series, title, volume)
                 job_dir = OUTPUT_ROOT / job_id
-                source_dir = job_dir / "source"
+                output_dir = job_dir / "epub"
+                source_dir = job_dir / "original"
+                output_dir.mkdir(parents=True, exist_ok=True)
                 source_dir.mkdir(parents=True, exist_ok=True)
 
-                input_path = _save_group(group, source_dir)
+                _save_group(group, source_dir)
                 input_summary = _input_payload(group)
-                cover_path = None
-                convert_cover_mode = cover_mode
-                if custom_cover and cover_mode == "custom":
-                    cover_path = _save_cover(custom_cover[0], job_dir)
-                elif cover_url and cover_mode == "online":
-                    cover_path = _save_online_cover(cover_url, job_dir)
-                    convert_cover_mode = "custom"
-                result = convert(
-                    ConvertRequest(
-                        input_path=input_path,
-                        output_dir=job_dir,
-                        profile=profile,
-                        title=title,
-                        author=author,
-                        series=series,
-                        volume=volume,
-                        language=language,
-                        publisher=publisher,
-                        description=description,
-                        mode=requested_mode,
-                        output_format=output_format,
-                        cover_mode=convert_cover_mode,
-                        cover_path=cover_path,
-                        split_size_mb=split_size_mb,
-                        quality=quality,
-                        crop=crop,
-                        split_spreads=split_spreads,
-                        protect_first_page=protect_first_page,
-                        color=color,
-                        dither=dither,
-                        gamma=gamma,
-                        pdf_zoom=pdf_zoom,
+                with tempfile.TemporaryDirectory(prefix="kindle-forge-input-") as temp:
+                    input_path = _save_group(group, Path(temp) / "input")
+                    cover_path = None
+                    convert_cover_mode = cover_mode
+                    if custom_cover and cover_mode == "custom":
+                        cover_path = _save_cover(custom_cover[0], source_dir)
+                    elif cover_url and cover_mode == "online":
+                        cover_path = _save_online_cover(cover_url, source_dir)
+                        convert_cover_mode = "custom"
+                    result = convert(
+                        ConvertRequest(
+                            input_path=input_path,
+                            output_dir=output_dir,
+                            profile=profile,
+                            title=title,
+                            author=author,
+                            series=series,
+                            volume=volume,
+                            language=language,
+                            publisher=publisher,
+                            description=description,
+                            mode=requested_mode,
+                            output_format=output_format,
+                            cover_mode=convert_cover_mode,
+                            cover_path=cover_path,
+                            split_size_mb=split_size_mb,
+                            quality=quality,
+                            crop=crop,
+                            split_spreads=split_spreads,
+                            protect_first_page=protect_first_page,
+                            color=color,
+                            dither=dither,
+                            gamma=gamma,
+                            pdf_zoom=pdf_zoom,
+                        )
                     )
-                )
                 files = [_file_payload(job_id, path) for path in result.outputs]
                 item = {
                     "jobId": job_id,
@@ -167,8 +174,9 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
                     "split": result.split,
                     "files": files,
                     "input": input_summary,
+                    "profile": _profile_payload(profile, profile_label),
                     "outputSize": sum(file["size"] for file in files),
-                    "outputUrl": f"/api/open-output?job={job_id}",
+                    "outputUrl": f"/api/open-output?job={quote(job_id, safe='')}",
                     "createdAt": _now(),
                     "status": "done",
                 }
@@ -213,14 +221,18 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
             cover_mode = _field(form, "coverMode", "first")
             cover_url = _field(form, "coverUrl", "").strip()
             custom_cover = _file_items(form, "coverFile")
+            preview_page = max(0, _int_field(form, "previewPage", 0))
+            pdf_zoom = _float_field(form, "pdfZoom", 1.0)
             previews: list[dict[str, Any]] = []
+            page_count: int | None = None
             with tempfile.TemporaryDirectory(prefix="kindle-forge-preview-") as temp:
                 temp_path = Path(temp)
                 input_path = _save_group([file_items[0]], temp_path / "source")
+                page_count = _source_page_count(input_path)
                 if mode == "auto":
                     options = ImageOptions(
                         profile=options.profile,
-                        mode=detect_mode(input_path, profile),
+                        mode=detect_mode(input_path, profile, pdf_zoom),
                         crop=options.crop,
                         split_spreads=options.split_spreads,
                         color=options.color,
@@ -229,29 +241,47 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
                     )
                 if cover_mode == "generated":
                     cover_image = make_generated_cover(metadata, profile)
-                    previews.append(_preview_payload("Capa final", cover_image, "1072 x 1448 · capa gerada", "cover"))
+                    previews.append(_preview_payload("Capa final", cover_image, f"{profile.width} x {profile.height} · capa gerada", "cover"))
                 elif cover_mode == "custom" and custom_cover:
                     cover_path = _save_cover(custom_cover[0], temp_path)
                     cover_image = prepare_cover_image(cover_path, options)
-                    previews.append(_preview_payload("Capa final", cover_image, "1072 x 1448 · capa personalizada", "cover"))
+                    previews.append(_preview_payload("Capa final", cover_image, f"{profile.width} x {profile.height} · capa personalizada", "cover"))
                 elif cover_mode == "online" and cover_url:
                     cover_path = _save_online_cover(cover_url, temp_path)
                     cover_image = prepare_cover_image(cover_path, options)
-                    previews.append(_preview_payload("Capa final", cover_image, "1072 x 1448 · capa online", "cover"))
-                for source in iter_source_images(input_path, profile):
-                    if not any(item["kind"] == "before" for item in previews):
-                        detail = f"{source.image.width} x {source.image.height} · antes do corte"
-                        previews.append(_preview_payload("Original — primeira página", source.image, detail, "before"))
-                    for page in process_image(source.image, options):
+                    previews.append(_preview_payload("Capa final", cover_image, f"{profile.width} x {profile.height} · capa online", "cover"))
+                found_page = False
+                for source_index, source in enumerate(iter_source_images(input_path, profile, pdf_zoom)):
+                    if source_index < preview_page:
+                        continue
+                    found_page = True
+                    page_number = source_index + 1
+                    page_label = _page_label(page_number, page_count)
+                    detail = f"{source.image.width} x {source.image.height} · {page_label.lower()} · antes do corte"
+                    previews.append(_preview_payload(f"Original — {page_label}", source.image, detail, "before"))
+                    processed_pages = process_image(source.image, options)
+                    for processed_index, page in enumerate(processed_pages, start=1):
                         mode_label = "color" if options.color else "grayscale"
                         margin = "margem cortada" if options.crop else "margem original"
-                        detail = f"{page.width} x {page.height} · {mode_label} · {margin}"
-                        previews.append(_preview_payload("Convertida — página Kindle", page, detail, "after"))
+                        split_label = f" · recorte {processed_index}/{len(processed_pages)}" if len(processed_pages) > 1 else ""
+                        detail = f"{page.width} x {page.height} · {mode_label} · {margin}{split_label}"
+                        previews.append(_preview_payload(f"Kindle — {page_label}", page, detail, "after"))
                         if len(previews) >= 5:
                             break
-                    if len(previews) >= 5:
-                        break
-            self._send_json({"previews": previews, "images": [item["src"] for item in previews]})
+                    break
+                if not found_page:
+                    total = f" Este arquivo tem {page_count} página(s)." if page_count else ""
+                    self._send_json({"error": f"Página {preview_page + 1} não encontrada.{total}"}, HTTPStatus.BAD_REQUEST)
+                    return
+            self._send_json(
+                {
+                    "previews": previews,
+                    "images": [item["src"] for item in previews],
+                    "page": preview_page + 1,
+                    "pageCount": page_count,
+                    "source": _upload_name(file_items[0]),
+                }
+            )
         except (SourceError, ValueError, RuntimeError) as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # pragma: no cover
@@ -319,8 +349,9 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         _, job_id, file_name = parts
-        target = (OUTPUT_ROOT / job_id / file_name).resolve()
-        if not _is_inside(target, OUTPUT_ROOT) or not target.exists() or target.is_dir():
+        job_dir = (OUTPUT_ROOT / job_id).resolve()
+        target = (job_dir / file_name).resolve()
+        if not _is_inside(target, job_dir) or not target.exists() or target.is_dir():
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         self._send_file(target, attachment=True)
@@ -395,6 +426,7 @@ def _save_group(group: list[cgi.FieldStorage], source_dir: Path) -> Path:
         name = _upload_name(item)
         suffix = Path(name).suffix.lower()
         target = source_dir / f"{index:04d}-{slugify(Path(name).stem, 'page')}{suffix}"
+        target = _unique_file_path(target)
         _write_upload(item, target)
     return source_dir
 
@@ -402,6 +434,7 @@ def _save_group(group: list[cgi.FieldStorage], source_dir: Path) -> Path:
 def _save_cover(item: cgi.FieldStorage, output_dir: Path) -> Path:
     suffix = Path(_upload_name(item)).suffix.lower() or ".jpg"
     target = output_dir / f"cover{suffix}"
+    target = _unique_file_path(target)
     _write_upload(item, target)
     return target
 
@@ -410,6 +443,7 @@ def _save_online_cover(url: str, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     data = download_cover(url)
     target = output_dir / "online-cover.jpg"
+    target = _unique_file_path(target)
     target.write_bytes(data)
     return target
 
@@ -419,6 +453,7 @@ def _save_upload(item: cgi.FieldStorage, output_dir: Path) -> Path:
     suffix = Path(name).suffix.lower()
     safe_name = f"{slugify(Path(name).stem, 'input')}{suffix}"
     target = output_dir / safe_name
+    target = _unique_file_path(target)
     _write_upload(item, target)
     return target
 
@@ -454,10 +489,23 @@ def _write_upload(item: cgi.FieldStorage, target: Path) -> None:
 
 
 def _file_payload(job_id: str, path: Path) -> dict[str, Any]:
+    job_dir = (OUTPUT_ROOT / job_id).resolve()
+    try:
+        relative_path = path.resolve().relative_to(job_dir).as_posix()
+    except ValueError:
+        relative_path = path.name
     return {
         "name": path.name,
-        "url": f"/download/{job_id}/{path.name}",
+        "url": f"/download/{quote(job_id, safe='')}/{quote(relative_path, safe='')}",
         "size": path.stat().st_size,
+    }
+
+
+def _profile_payload(profile, label: str) -> dict[str, str]:
+    return {
+        "key": profile.key,
+        "label": label,
+        "resolution": profile.resolution,
     }
 
 
@@ -482,6 +530,48 @@ def _image_data_url(image, quality: int) -> str:
     save_image.save(buffer, "JPEG", quality=quality, optimize=True)
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return f"data:image/jpeg;base64,{encoded}"
+
+
+def _source_page_count(path: Path) -> int | None:
+    suffix = path.suffix.lower()
+    if path.is_dir():
+        total = 0
+        for item in path.rglob("*"):
+            if not item.is_file():
+                continue
+            count = _source_page_count(item)
+            if count is None:
+                return None
+            total += count
+        return total or None
+    if is_image_path(path):
+        return 1
+    if suffix == ".pdf":
+        try:
+            import fitz  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+        try:
+            document = fitz.open(path)
+            try:
+                return int(document.page_count)
+            finally:
+                document.close()
+        except Exception:
+            return None
+    if suffix in {".cbz", ".zip", ".epub"}:
+        try:
+            with ZipFile(path) as archive:
+                return sum(1 for name in archive.namelist() if is_image_path(Path(name)))
+        except Exception:
+            return None
+    return None
+
+
+def _page_label(page_number: int, page_count: int | None) -> str:
+    if page_count:
+        return f"Página {page_number} de {page_count}"
+    return f"Página {page_number}"
 
 
 def _preview_payload(label: str, image, detail: str, kind: str) -> dict[str, Any]:
@@ -552,14 +642,50 @@ def _is_inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def _unique_job_id(base: str) -> str:
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    candidate = base
+def _collection_id(series: str, title: str, volume: str = "") -> str:
+    base_title = series.strip() or _title_without_volume(title, volume)
+    return slugify(base_title, "colecao")
+
+
+def _title_without_volume(title: str, volume: str) -> str:
+    clean_volume = _clean_volume(volume)
+    if clean_volume:
+        if clean_volume.isdigit():
+            volume_pattern = f"0*{int(clean_volume)}"
+        else:
+            volume_pattern = re.escape(clean_volume)
+        patterns = [
+            rf"\b(?:vol(?:ume)?\.?|v)\s*{volume_pattern}\b",
+            rf"\b{volume_pattern}\s*(?:vol(?:ume)?\.?|v)\b",
+        ]
+    else:
+        patterns = [
+            r"\b(?:vol(?:ume)?\.?|v)\s*\d+\b",
+            r"\b\d+\s*(?:vol(?:ume)?\.?|v)\b",
+        ]
+    cleaned = title
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.I)
+    return cleaned.strip(" -_.,") or title
+
+
+def _clean_volume(volume: str) -> str:
+    clean = volume.strip()
+    clean = re.sub(r"^(?:vol(?:ume)?\.?|v)\s*", "", clean, flags=re.I).strip()
+    return clean
+
+
+def _unique_file_path(target: Path) -> Path:
+    if not target.exists():
+        return target
+    stem = target.stem
+    suffix = target.suffix
     index = 2
-    while (OUTPUT_ROOT / candidate).exists():
-        candidate = f"{base}-{index}"
+    while True:
+        candidate = target.with_name(f"{stem}-{index}{suffix}")
+        if not candidate.exists():
+            return candidate
         index += 1
-    return candidate
 
 
 def _open_path(target: Path) -> None:

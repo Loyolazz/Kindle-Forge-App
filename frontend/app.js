@@ -10,6 +10,9 @@ const sortFilesButton = document.querySelector("#sortFilesButton");
 const reverseFilesButton = document.querySelector("#reverseFilesButton");
 const mergePdfsButton = document.querySelector("#mergePdfsButton");
 const dropZone = document.querySelector("#dropZone");
+const profileSelect = document.querySelector("#profileSelect");
+const profilePill = document.querySelector("#profilePill");
+const profileInfo = document.querySelector("#profileInfo");
 const coverInput = document.querySelector("#coverInput");
 const coverLabel = document.querySelector("#coverLabel");
 const coverUrlInput = document.querySelector("#coverUrlInput");
@@ -38,6 +41,12 @@ const resultList = document.querySelector("#resultList");
 const previewGrid = document.querySelector("#previewGrid");
 const previewTitle = document.querySelector("#previewTitle");
 const previewDetail = document.querySelector("#previewDetail");
+const previewSourceBar = document.querySelector("#previewSourceBar");
+const previewSourceSelect = document.querySelector("#previewSourceSelect");
+const previewPageInput = document.querySelector("#previewPageInput");
+const prevSourcePageButton = document.querySelector("#prevSourcePageButton");
+const nextSourcePageButton = document.querySelector("#nextSourcePageButton");
+const loadPreviewButton = document.querySelector("#loadPreviewButton");
 const prevPreviewButton = document.querySelector("#prevPreviewButton");
 const nextPreviewButton = document.querySelector("#nextPreviewButton");
 const zoomPreviewButton = document.querySelector("#zoomPreviewButton");
@@ -47,29 +56,167 @@ const messageBox = document.querySelector("#messageBox");
 
 let selectedFiles = [];
 let draggedFileIndex = null;
+let activePreviewFileIndex = 0;
+let activePreviewPage = 0;
+let activePreviewPageCount = null;
 let previewItems = [];
 let previewIndex = 0;
 let previewZoomed = false;
+let previewAutoTimer = null;
+let previewRequestId = 0;
+let selectedMetadataKey = "";
 let progressTimer = null;
 let progressIndex = 0;
+let progressState = "idle";
 
 const progressSteps = [
-  "Lendo arquivo",
-  "Extraindo páginas",
-  "Cortando margens",
-  "Redimensionando para Kindle",
-  "Gerando EPUB",
-  "Salvando histórico",
+  {
+    title: "Recebendo arquivos",
+    detail: "Conferindo PDFs, capítulos, imagens e arquivos compactados.",
+  },
+  {
+    title: "Extraindo páginas",
+    detail: "Lendo as páginas na ordem escolhida para o volume.",
+  },
+  {
+    title: "Tratando imagem",
+    detail: "Aplicando corte de margem, contraste, cor e páginas duplas.",
+  },
+  {
+    title: "Ajustando para o leitor",
+    detail: "Redimensionando tudo para o leitor escolhido.",
+  },
+  {
+    title: "Montando saída",
+    detail: "Criando EPUB, CBZ ou PDF e dividindo partes quando precisar.",
+  },
+  {
+    title: "Finalizando biblioteca",
+    detail: "Salvando histórico, tamanho final e links de download.",
+  },
 ];
+
+const deviceProfileGroups = [
+  {
+    label: "Kindle por geração",
+    items: [
+      { key: "kindle-basic-12", name: "Kindle Basic", generation: "12ª geração / 2024", resolution: "1072 x 1448", ppi: "300 ppi", note: "6 polegadas, melhor padrão para mangá atual." },
+      { key: "kindle-basic-11", name: "Kindle Basic", generation: "11ª geração / 2022", resolution: "1072 x 1448", ppi: "300 ppi", note: "Seu Kindle Basic 11. Opção padrão." },
+      { key: "kindle-basic-10", name: "Kindle Basic", generation: "10ª geração / 2019", resolution: "600 x 800", ppi: "167 ppi", note: "Modelo básico antigo; prefira arquivo leve." },
+      { key: "kindle-paperwhite-12", name: "Kindle Paperwhite", generation: "12ª geração / 2024", resolution: "1264 x 1680", ppi: "300 ppi", note: "7 polegadas, bom para HQ e PDFs." },
+      { key: "kindle-paperwhite-11", name: "Kindle Paperwhite", generation: "11ª geração / 2021", resolution: "1236 x 1648", ppi: "300 ppi", note: "6,8 polegadas." },
+      { key: "kindle-paperwhite-10", name: "Kindle Paperwhite", generation: "10ª geração / 2018", resolution: "1072 x 1448", ppi: "300 ppi", note: "6 polegadas." },
+      { key: "kindle-paperwhite-7", name: "Kindle Paperwhite", generation: "7ª geração / 2015", resolution: "1072 x 1448", ppi: "300 ppi", note: "Também conhecido como Paperwhite 3." },
+      { key: "kindle-oasis-10", name: "Kindle Oasis", generation: "10ª geração / 2019", resolution: "1264 x 1680", ppi: "300 ppi", note: "7 polegadas." },
+      { key: "kindle-oasis-9", name: "Kindle Oasis", generation: "9ª geração / 2017", resolution: "1264 x 1680", ppi: "300 ppi", note: "7 polegadas." },
+      { key: "kindle-oasis-8", name: "Kindle Oasis", generation: "8ª geração / 2016", resolution: "1080 x 1440", ppi: "300 ppi", note: "6 polegadas." },
+      { key: "kindle-voyage", name: "Kindle Voyage", generation: "7ª geração / 2014", resolution: "1080 x 1440", ppi: "300 ppi", note: "Tela 6 polegadas de alta densidade." },
+      { key: "kindle-scribe-colorsoft-2025", name: "Kindle Scribe Colorsoft", generation: "3ª geração / 2025", resolution: "1980 x 2640", ppi: "300/150 ppi", note: "11 polegadas colorido. Perfil calculado por tela 11 pol. 300 ppi." },
+      { key: "kindle-scribe-2025", name: "Kindle Scribe", generation: "3ª geração / 2025", resolution: "1980 x 2640", ppi: "300 ppi", note: "11 polegadas. Perfil calculado por tela 11 pol. 300 ppi." },
+      { key: "kindle-scribe-12", name: "Kindle Scribe", generation: "12ª geração / 2024", resolution: "1860 x 2480", ppi: "300 ppi", note: "10,2 polegadas. Excelente para PDF e artbook." },
+      { key: "kindle-scribe-11", name: "Kindle Scribe", generation: "11ª geração / 2022", resolution: "1860 x 2480", ppi: "300 ppi", note: "10,2 polegadas." },
+      { key: "kindle-colorsoft-12", name: "Kindle Colorsoft", generation: "12ª geração / 2024", resolution: "1264 x 1680", ppi: "300/150 ppi", note: "Colorido; use presets com cor." },
+      { key: "kindle-dx", name: "Kindle DX", generation: "2ª geração / 2009", resolution: "824 x 1200", ppi: "150 ppi", note: "Tela grande antiga." },
+      { key: "kindle-fire", name: "Kindle Fire", generation: "tablet", resolution: "1200 x 1920", ppi: "colorido", note: "Use HQ colorida, revista ou artbook." },
+    ],
+  },
+  {
+    label: "Kobo",
+    items: [
+      { key: "kobo-clara-bw", name: "Kobo Clara BW", generation: "2024", resolution: "1072 x 1448", ppi: "300 ppi", note: "6 polegadas P&B." },
+      { key: "kobo-clara-colour", name: "Kobo Clara Colour", generation: "2024", resolution: "1072 x 1448", ppi: "300/150 ppi", note: "6 polegadas colorido." },
+      { key: "kobo-clara-2e", name: "Kobo Clara 2E", generation: "2022", resolution: "1072 x 1448", ppi: "300 ppi", note: "6 polegadas." },
+      { key: "kobo-clara-hd", name: "Kobo Clara HD", generation: "2018", resolution: "1072 x 1448", ppi: "300 ppi", note: "6 polegadas." },
+      { key: "kobo-libra-colour", name: "Kobo Libra Colour", generation: "2024", resolution: "1264 x 1680", ppi: "300/150 ppi", note: "7 polegadas colorido." },
+      { key: "kobo-libra-2", name: "Kobo Libra 2", generation: "2021", resolution: "1264 x 1680", ppi: "300 ppi", note: "7 polegadas." },
+      { key: "kobo-sage", name: "Kobo Sage", generation: "2021", resolution: "1440 x 1920", ppi: "300 ppi", note: "8 polegadas." },
+      { key: "kobo-elipsa-2e", name: "Kobo Elipsa 2E", generation: "2023", resolution: "1404 x 1872", ppi: "227 ppi", note: "10,3 polegadas para PDFs." },
+      { key: "kobo-elipsa", name: "Kobo Elipsa", generation: "2021", resolution: "1404 x 1872", ppi: "227 ppi", note: "10,3 polegadas." },
+      { key: "kobo-nia", name: "Kobo Nia", generation: "2020", resolution: "758 x 1024", ppi: "212 ppi", note: "Arquivo leve recomendado." },
+    ],
+  },
+  {
+    label: "PocketBook e Nook",
+    items: [
+      { key: "pocketbook-verse-pro", name: "PocketBook Verse Pro", generation: "6 polegadas", resolution: "1072 x 1448", ppi: "300 ppi", note: "P&B moderno." },
+      { key: "pocketbook-era", name: "PocketBook Era", generation: "7 polegadas", resolution: "1264 x 1680", ppi: "300 ppi", note: "Bom para HQ e mangá." },
+      { key: "pocketbook-inkpad-3", name: "PocketBook InkPad 3", generation: "7,8 polegadas", resolution: "1404 x 1872", ppi: "300 ppi", note: "Tela grande P&B." },
+      { key: "pocketbook-inkpad-color-3", name: "PocketBook InkPad Color 3", generation: "7,8 polegadas", resolution: "1404 x 1872", ppi: "300/150 ppi", note: "Colorido." },
+      { key: "pocketbook-inkpad-x", name: "PocketBook InkPad X", generation: "10,3 polegadas", resolution: "1404 x 1872", ppi: "227 ppi", note: "PDFs e livros técnicos." },
+      { key: "pocketbook-touch-lux-5", name: "PocketBook Touch Lux 5", generation: "6 polegadas", resolution: "758 x 1024", ppi: "212 ppi", note: "Arquivo leve recomendado." },
+      { key: "nook-glowlight-4", name: "Nook GlowLight 4", generation: "6 polegadas", resolution: "1072 x 1448", ppi: "300 ppi", note: "P&B moderno." },
+      { key: "nook-glowlight-4-plus", name: "Nook GlowLight 4 Plus", generation: "7,8 polegadas", resolution: "1404 x 1872", ppi: "300 ppi", note: "Tela maior." },
+      { key: "nook-color", name: "Nook Color", generation: "tablet antigo", resolution: "600 x 1024", ppi: "colorido", note: "Use presets coloridos leves." },
+      { key: "nook-hd-plus", name: "Nook HD Plus", generation: "tablet", resolution: "1280 x 1920", ppi: "colorido", note: "Revista e HQ colorida." },
+    ],
+  },
+  {
+    label: "Genérico, Android e tablets",
+    items: [
+      { key: "generic-eink", name: "Generic e-ink", generation: "6 polegadas antigo", resolution: "600 x 800", ppi: "167 ppi", note: "Compatibilidade e arquivo leve." },
+      { key: "generic-hd-eink", name: "Generic HD e-ink", generation: "6 polegadas 300 ppi", resolution: "1072 x 1448", ppi: "300 ppi", note: "Opção segura para e-readers P&B." },
+      { key: "generic-large-eink", name: "Generic large e-ink", generation: "8 polegadas", resolution: "1404 x 1872", ppi: "300 ppi", note: "PDF, HQ e apostila." },
+      { key: "android-eink-6", name: "Android e-ink", generation: "6 polegadas", resolution: "1072 x 1448", ppi: "300 ppi", note: "Boox, Meebook e similares." },
+      { key: "android-eink-7", name: "Android e-ink", generation: "7 polegadas", resolution: "1264 x 1680", ppi: "300 ppi", note: "Boox, Meebook e similares." },
+      { key: "android-eink-10", name: "Android e-ink", generation: "10 polegadas", resolution: "1404 x 1872", ppi: "227 ppi", note: "PDFs grandes." },
+      { key: "boox-palma", name: "Boox Palma", generation: "smart reader", resolution: "824 x 1648", ppi: "300 ppi", note: "Tela estreita; bom para webtoon." },
+      { key: "boox-note-air", name: "Boox Note Air", generation: "10,3 polegadas", resolution: "1404 x 1872", ppi: "227 ppi", note: "PDFs, apostilas e artbooks." },
+      { key: "tablet-compact", name: "Tablet compacto", generation: "7-8 polegadas", resolution: "1200 x 1920", ppi: "colorido", note: "HQ, revista e livro ilustrado." },
+      { key: "tablet-large", name: "Tablet grande", generation: "10-13 polegadas", resolution: "1600 x 2560", ppi: "colorido", note: "PDFs técnicos e artbooks." },
+      { key: "ipad", name: "Apple iPad", generation: "Retina", resolution: "1536 x 2048", ppi: "colorido", note: "Use presets coloridos." },
+      { key: "galaxy", name: "Galaxy Tab", generation: "tablet", resolution: "1200 x 1920", ppi: "colorido", note: "Use presets coloridos." },
+    ],
+  },
+  {
+    label: "Sony e leitores antigos",
+    items: [
+      { key: "sony", name: "Sony Reader", generation: "padrão", resolution: "600 x 800", ppi: "antigo", note: "Arquivo leve recomendado." },
+      { key: "sony-300", name: "Sony 300", generation: "antigo", resolution: "600 x 800", ppi: "antigo", note: "Arquivo leve recomendado." },
+      { key: "sony-900", name: "Sony 900", generation: "antigo", resolution: "600 x 1024", ppi: "antigo", note: "Tela alta." },
+      { key: "sony-landscape", name: "Sony Landscape", generation: "paisagem", resolution: "800 x 600", ppi: "antigo", note: "Modo paisagem." },
+      { key: "sony-t3", name: "Sony T3", generation: "2013", resolution: "758 x 1024", ppi: "212 ppi", note: "Arquivo leve recomendado." },
+      { key: "cybook-3", name: "Cybook 3", generation: "antigo", resolution: "600 x 800", ppi: "antigo", note: "Compatibilidade." },
+      { key: "cybook-opus", name: "Cybook Opus", generation: "antigo", resolution: "600 x 800", ppi: "antigo", note: "Compatibilidade." },
+      { key: "hanlin-v3", name: "Hanlin V3", generation: "antigo", resolution: "600 x 800", ppi: "antigo", note: "Compatibilidade." },
+      { key: "hanlin-v5", name: "Hanlin V5", generation: "antigo", resolution: "600 x 800", ppi: "antigo", note: "Compatibilidade." },
+      { key: "iliad", name: "iLiad", generation: "antigo", resolution: "768 x 1024", ppi: "antigo", note: "PDFs simples." },
+      { key: "irexdr800", name: "IrexDR800", generation: "antigo", resolution: "768 x 1024", ppi: "antigo", note: "PDFs simples." },
+      { key: "irexdr1000", name: "IrexDR1000", generation: "antigo", resolution: "1024 x 1280", ppi: "antigo", note: "PDFs simples." },
+    ],
+  },
+];
+
+const deviceProfiles = Object.fromEntries(deviceProfileGroups.flatMap((group) => group.items.map((item) => [item.key, item])));
 
 const presets = {
   manga: { mode: "manga", quality: 85, gamma: 0.95, crop: true, split: true, protect: true, dither: false, color: false, splitMb: 200 },
+  mangaTone: { mode: "manga", quality: 88, gamma: 1, crop: true, split: true, protect: true, dither: true, color: false, splitMb: 200 },
+  mangaColor: { mode: "manga", quality: 88, gamma: 1, crop: true, split: true, protect: true, dither: false, color: true, splitMb: 200 },
   comic: { mode: "comic", quality: 86, gamma: 1, crop: true, split: true, protect: true, dither: true, color: false, splitMb: 200 },
+  comicColor: { mode: "comic", quality: 88, gamma: 1, crop: true, split: true, protect: true, dither: false, color: true, splitMb: 200 },
+  bd: { mode: "comic", quality: 90, gamma: 1, crop: true, split: true, protect: true, dither: true, color: true, splitMb: 220 },
   webtoon: { mode: "webtoon", quality: 84, gamma: 1, crop: true, split: false, protect: false, dither: false, color: false, splitMb: 200 },
-  pdf: { mode: "auto", quality: 88, gamma: 0.9, crop: true, split: false, protect: true, dither: false, color: false, splitMb: 200 },
-  quality: { mode: "auto", quality: 92, gamma: 1, crop: true, split: true, protect: true, dither: true, color: false, splitMb: 200 },
-  light: { mode: "auto", quality: 72, gamma: 0.95, crop: true, split: true, protect: true, dither: false, color: false, splitMb: 180 },
+  manhua: { mode: "comic", quality: 86, gamma: 0.98, crop: true, split: true, protect: true, dither: false, color: false, splitMb: 200 },
+  lightNovel: { mode: "comic", quality: 88, gamma: 0.9, crop: true, split: false, protect: true, dither: true, color: false, splitMb: 200 },
+  novel: { mode: "comic", quality: 84, gamma: 0.86, crop: true, split: false, protect: true, dither: false, color: false, splitMb: 180 },
+  bookScan: { mode: "comic", quality: 86, gamma: 0.82, crop: true, split: false, protect: true, dither: false, color: false, splitMb: 190 },
+  illustratedBook: { mode: "comic", quality: 88, gamma: 0.96, crop: true, split: false, protect: true, dither: true, color: false, splitMb: 210 },
+  pdfScan: { mode: "auto", quality: 88, gamma: 0.9, crop: true, split: false, protect: true, dither: false, color: false, splitMb: 200 },
+  pdfText: { mode: "auto", quality: 90, gamma: 0.85, crop: true, split: false, protect: false, dither: false, color: false, splitMb: 200 },
+  textbook: { mode: "comic", quality: 90, gamma: 0.92, crop: true, split: false, protect: true, dither: true, color: false, splitMb: 220 },
+  magazine: { mode: "comic", quality: 88, gamma: 1, crop: true, split: false, protect: true, dither: false, color: true, splitMb: 220 },
+  artbook: { mode: "comic", quality: 93, gamma: 1, crop: false, split: true, protect: true, dither: false, color: true, splitMb: 260 },
+  photoBook: { mode: "comic", quality: 90, gamma: 1, crop: false, split: false, protect: true, dither: false, color: true, splitMb: 240 },
   auto: { mode: "auto", quality: 85, gamma: 1, crop: true, split: true, protect: true, dither: false, color: false, splitMb: 200 },
+};
+
+const quickPresets = {
+  quality: { quality: 92, gamma: 1, dither: true, splitMb: 250 },
+  light: { quality: 72, gamma: 0.95, dither: false, color: false, splitMb: 180 },
+  eink: { quality: 86, gamma: 0.82, crop: true, dither: false, color: false },
+  soft: { quality: 84, gamma: 1.08, dither: true, color: false },
+  color: { quality: 88, gamma: 1, color: true, dither: false },
+  send: { quality: 82, splitMb: 190, crop: true },
 };
 
 const formatBytes = (bytes) => {
@@ -110,12 +257,23 @@ const friendlyApiError = (data, fallback) => {
 const setBusy = (busy) => {
   convertButton.disabled = busy;
   previewButton.disabled = busy;
+  loadPreviewButton.disabled = busy;
+  prevSourcePageButton.disabled = busy || activePreviewPage <= 0;
+  nextSourcePageButton.disabled = busy || (activePreviewPageCount !== null && activePreviewPage >= activePreviewPageCount - 1);
   convertButton.querySelector("span").textContent = busy ? "Convertendo" : "Converter";
+};
+
+const setPreviewBusy = (busy) => {
+  previewButton.disabled = busy;
+  loadPreviewButton.disabled = busy;
+  prevSourcePageButton.disabled = busy || activePreviewPage <= 0;
+  nextSourcePageButton.disabled = busy || (activePreviewPageCount !== null && activePreviewPage >= activePreviewPageCount - 1);
 };
 
 const startProgress = () => {
   clearInterval(progressTimer);
   progressIndex = 0;
+  progressState = "working";
   renderProgress();
   progressList.hidden = false;
   progressTimer = setInterval(() => {
@@ -128,17 +286,71 @@ const stopProgress = () => {
   clearInterval(progressTimer);
   progressTimer = null;
   progressIndex = progressSteps.length;
+  progressState = "done";
+  renderProgress();
+};
+
+const failProgress = () => {
+  clearInterval(progressTimer);
+  progressTimer = null;
+  progressState = "error";
   renderProgress();
 };
 
 const renderProgress = () => {
   progressList.replaceChildren();
+  const total = progressSteps.length;
+  const currentStep = progressSteps[Math.min(progressIndex, total - 1)];
+  const completedCount = progressState === "done" ? total : Math.min(progressIndex, total - 1);
+  const percent =
+    progressState === "done"
+      ? 100
+      : progressState === "working"
+        ? Math.min(96, Math.round(((progressIndex + 0.35) / total) * 100))
+        : Math.round((completedCount / total) * 100);
+
+  const summary = document.createElement("div");
+  summary.className = `progress-summary ${progressState}`;
+  const summaryTitle =
+    progressState === "done" ? "Conversão concluída" : progressState === "error" ? "Conversão interrompida" : "Conversão em andamento";
+  const summaryDetail =
+    progressState === "done"
+      ? `${total} de ${total} etapas concluídas.`
+      : progressState === "error"
+        ? `Parou em: ${currentStep.title}.`
+        : `Etapa ${Math.min(progressIndex + 1, total)} de ${total}: ${currentStep.title}.`;
+  summary.innerHTML = `
+    <div class="progress-summary-head">
+      <strong>${summaryTitle}</strong>
+      <span>${percent}%</span>
+    </div>
+    <p>${summaryDetail}</p>
+    <div class="progress-bar"><span style="width: ${percent}%"></span></div>
+  `;
+  progressList.append(summary);
+
   progressSteps.forEach((step, index) => {
     const node = document.createElement("div");
     node.className = "progress-step";
-    if (index < progressIndex) node.classList.add("done");
-    if (index === Math.min(progressIndex, progressSteps.length - 1)) node.classList.add("active");
-    node.textContent = step;
+    const isDone = progressState === "done" || index < progressIndex;
+    const isActive = progressState === "working" && index === Math.min(progressIndex, total - 1);
+    const isError = progressState === "error" && index === Math.min(progressIndex, total - 1);
+    if (isDone) node.classList.add("done");
+    if (isActive) node.classList.add("active");
+    if (isError) node.classList.add("error");
+
+    const marker = document.createElement("span");
+    marker.className = "progress-marker";
+    marker.textContent = isDone ? "✓" : isError ? "!" : String(index + 1);
+
+    const copy = document.createElement("span");
+    copy.className = "progress-copy";
+    const title = document.createElement("strong");
+    title.textContent = step.title;
+    const detail = document.createElement("span");
+    detail.textContent = step.detail;
+    copy.append(title, detail);
+    node.append(marker, copy);
     progressList.append(node);
   });
 };
@@ -147,8 +359,23 @@ const selectedFormats = () => [...form.querySelectorAll('input[name="format"]:ch
 
 const checkedField = (name) => form.querySelector(`input[name="${name}"]`);
 
+const displayFileName = (file) => file?.webkitRelativePath || file?.name || "";
+
+const currentPreviewFile = () => {
+  if (!selectedFiles.length) return null;
+  activePreviewFileIndex = Math.min(Math.max(activePreviewFileIndex, 0), selectedFiles.length - 1);
+  return selectedFiles[activePreviewFileIndex];
+};
+
+const resetPreviewPage = () => {
+  activePreviewPage = 0;
+  activePreviewPageCount = null;
+};
+
 const syncFiles = (files) => {
   selectedFiles = [...files].filter((file) => file.name);
+  activePreviewFileIndex = 0;
+  resetPreviewPage();
   renderSelectedFiles();
   if (selectedFiles.length === 1 && !titleInput.value.trim()) {
     titleInput.value = fileTitle(selectedFiles[0].name);
@@ -156,6 +383,7 @@ const syncFiles = (files) => {
   if (selectedFiles.length > 1 && !titleInput.value.trim()) {
     titleInput.value = guessCollectionTitle(selectedFiles);
   }
+  schedulePreviewRefresh();
 };
 
 const renderSelectedFiles = () => {
@@ -165,6 +393,7 @@ const renderSelectedFiles = () => {
     fileList.hidden = true;
     fileOrderTools.hidden = true;
     fileList.replaceChildren();
+    renderPreviewSourceControls();
     return;
   }
   const total = selectedFiles.reduce((sum, file) => sum + file.size, 0);
@@ -176,20 +405,41 @@ const renderSelectedFiles = () => {
   selectedFiles.forEach((file, index) => {
     const chip = document.createElement("div");
     chip.className = "file-chip";
+    chip.classList.toggle("active", index === activePreviewFileIndex);
     chip.draggable = true;
     chip.dataset.index = String(index);
-    chip.innerHTML = `
-      <span class="file-index">${index + 1}</span>
-      <span class="file-name">${file.webkitRelativePath || file.name}</span>
-      <strong>${formatBytes(file.size)}</strong>
-      <span class="file-controls">
-        <button type="button" data-action="up" title="Subir">↑</button>
-        <button type="button" data-action="down" title="Descer">↓</button>
-        <button type="button" data-action="remove" title="Remover">×</button>
-      </span>
-    `;
+
+    const indexNode = document.createElement("span");
+    indexNode.className = "file-index";
+    indexNode.textContent = String(index + 1);
+
+    const nameNode = document.createElement("span");
+    nameNode.className = "file-name";
+    nameNode.textContent = displayFileName(file);
+
+    const sizeNode = document.createElement("strong");
+    sizeNode.textContent = formatBytes(file.size);
+
+    const controls = document.createElement("span");
+    controls.className = "file-controls";
+    [
+      ["preview", "Ver", "Mostrar na prévia"],
+      ["up", "↑", "Subir"],
+      ["down", "↓", "Descer"],
+      ["remove", "×", "Remover"],
+    ].forEach(([action, label, title]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.action = action;
+      button.title = title;
+      button.textContent = label;
+      controls.append(button);
+    });
+
+    chip.append(indexNode, nameNode, sizeNode, controls);
     fileList.append(chip);
   });
+  renderPreviewSourceControls();
 };
 
 const moveFile = (from, to) => {
@@ -198,20 +448,49 @@ const moveFile = (from, to) => {
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   selectedFiles = next;
+  if (activePreviewFileIndex === from) {
+    activePreviewFileIndex = to;
+  } else if (from < activePreviewFileIndex && activePreviewFileIndex <= to) {
+    activePreviewFileIndex -= 1;
+  } else if (to <= activePreviewFileIndex && activePreviewFileIndex < from) {
+    activePreviewFileIndex += 1;
+  }
   renderSelectedFiles();
 };
 
 fileList.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-action]");
-  if (!button) return;
-  const chip = button.closest(".file-chip");
+  const chip = event.target.closest(".file-chip");
+  if (!chip) return;
   const index = Number(chip.dataset.index);
+  const button = event.target.closest("button[data-action]");
+  if (!button) {
+    selectPreviewFile(index);
+    return;
+  }
   const action = button.dataset.action;
-  if (action === "up") moveFile(index, index - 1);
-  if (action === "down") moveFile(index, index + 1);
+  if (action === "preview") selectPreviewFile(index);
+  if (action === "up") {
+    moveFile(index, index - 1);
+    schedulePreviewRefresh();
+  }
+  if (action === "down") {
+    moveFile(index, index + 1);
+    schedulePreviewRefresh();
+  }
   if (action === "remove") {
     selectedFiles.splice(index, 1);
+    if (activePreviewFileIndex === index) {
+      activePreviewFileIndex = Math.min(index, Math.max(0, selectedFiles.length - 1));
+      resetPreviewPage();
+    } else if (index < activePreviewFileIndex) {
+      activePreviewFileIndex -= 1;
+    }
     renderSelectedFiles();
+    if (selectedFiles.length) {
+      schedulePreviewRefresh();
+    } else {
+      renderPreview([]);
+    }
   }
 });
 
@@ -226,6 +505,7 @@ fileList.addEventListener("dragstart", (event) => {
 fileList.addEventListener("dragend", () => {
   draggedFileIndex = null;
   fileList.querySelectorAll(".file-chip").forEach((chip) => chip.classList.remove("dragging"));
+  schedulePreviewRefresh();
 });
 
 fileList.addEventListener("dragover", (event) => {
@@ -240,13 +520,19 @@ fileList.addEventListener("dragover", (event) => {
 });
 
 sortFilesButton.addEventListener("click", () => {
+  const activeFile = currentPreviewFile();
   selectedFiles.sort(naturalCompare);
+  activePreviewFileIndex = Math.max(0, selectedFiles.indexOf(activeFile));
   renderSelectedFiles();
+  schedulePreviewRefresh();
 });
 
 reverseFilesButton.addEventListener("click", () => {
+  const length = selectedFiles.length;
   selectedFiles.reverse();
+  activePreviewFileIndex = length - 1 - activePreviewFileIndex;
   renderSelectedFiles();
+  schedulePreviewRefresh();
 });
 
 mergePdfsButton.addEventListener("click", () => {
@@ -279,21 +565,39 @@ const applyPreset = (name) => {
   document.querySelectorAll(".preset-button").forEach((button) => {
     button.classList.toggle("active", button.dataset.preset === name);
   });
-  modeInput.value = preset.mode;
-  qualityInput.value = String(preset.quality);
-  gammaInput.value = String(preset.gamma);
-  splitSizeInput.value = String(preset.splitMb);
-  checkedField("crop").checked = preset.crop;
-  splitInput.checked = preset.split;
-  protectFirstInput.checked = preset.protect;
-  checkedField("dither").checked = preset.dither;
-  checkedField("color").checked = preset.color;
+  setControlValues(preset);
+  document.querySelectorAll(".quick-preset-button").forEach((button) => button.classList.remove("active"));
   syncControlText();
+  schedulePreviewRefresh();
+};
+
+const applyQuickPreset = (name) => {
+  const preset = quickPresets[name];
+  if (!preset) return;
+  setControlValues(preset);
+  document.querySelectorAll(".quick-preset-button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.quickPreset === name);
+  });
+  syncControlText();
+  schedulePreviewRefresh();
+};
+
+const setControlValues = (preset) => {
+  if (preset.mode !== undefined) modeInput.value = preset.mode;
+  if (preset.quality !== undefined) qualityInput.value = String(preset.quality);
+  if (preset.gamma !== undefined) gammaInput.value = String(preset.gamma);
+  if (preset.splitMb !== undefined) splitSizeInput.value = String(preset.splitMb);
+  if (preset.crop !== undefined) checkedField("crop").checked = preset.crop;
+  if (preset.split !== undefined) splitInput.checked = preset.split;
+  if (preset.protect !== undefined) protectFirstInput.checked = preset.protect;
+  if (preset.dither !== undefined) checkedField("dither").checked = preset.dither;
+  if (preset.color !== undefined) checkedField("color").checked = preset.color;
 };
 
 const syncControlText = () => {
   qualityValue.textContent = qualityInput.value;
   gammaValue.textContent = Number(gammaInput.value).toFixed(2);
+  syncProfileText();
   if (modeInput.value === "webtoon") {
     splitInput.checked = false;
     splitInput.disabled = true;
@@ -304,17 +608,52 @@ const syncControlText = () => {
   }
 };
 
-const buildPayload = (onlyFirst = false) => {
+const buildProfileOptions = () => {
+  profileSelect.replaceChildren();
+  deviceProfileGroups.forEach((group) => {
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.label;
+    group.items.forEach((profile) => {
+      const option = document.createElement("option");
+      option.value = profile.key;
+      option.textContent = `${profile.name} · ${profile.generation} · ${profile.resolution} · ${profile.ppi}`;
+      if (profile.key === "kindle-basic-11") option.selected = true;
+      optgroup.append(option);
+    });
+    profileSelect.append(optgroup);
+  });
+};
+
+const syncProfileText = () => {
+  const profile = deviceProfiles[profileSelect.value] || deviceProfiles["kindle-basic-11"];
+  profilePill.textContent = `${profile.name} · ${profile.resolution}`;
+  profileInfo.innerHTML = `
+    <div>
+      <strong>${profile.name}</strong>
+      <span>${profile.generation}</span>
+    </div>
+    <div>
+      <strong>${profile.resolution}</strong>
+      <span>${profile.ppi}</span>
+    </div>
+    <p>${profile.note}</p>
+  `;
+};
+
+const buildPayload = (files = selectedFiles, extras = {}) => {
   const formats = selectedFormats();
   if (!formats.length) throw new Error("Marque pelo menos um formato.");
-  if (!selectedFiles.length) throw new Error("Escolha arquivos ou uma pasta.");
+  if (!files.length) throw new Error("Escolha arquivos ou uma pasta.");
   const payload = new FormData(form);
   payload.delete("file");
   payload.delete("format");
   payload.append("format", formats.join(","));
-  payload.set("profile", "kindle11");
-  const files = onlyFirst ? selectedFiles.slice(0, 1) : selectedFiles;
+  payload.set("profile", profileSelect.value || "kindle11");
+  payload.set("profileLabel", deviceProfiles[profileSelect.value]?.name || "Leitor selecionado");
   files.forEach((file) => payload.append("file", file, file.webkitRelativePath || file.name));
+  Object.entries(extras).forEach(([key, value]) => {
+    payload.set(key, String(value));
+  });
   if (coverInput.files[0]) {
     payload.append("coverFile", coverInput.files[0], coverInput.files[0].name);
   }
@@ -362,6 +701,15 @@ document.querySelectorAll(".preset-button").forEach((button) => {
   button.addEventListener("click", () => applyPreset(button.dataset.preset));
 });
 
+document.querySelectorAll(".quick-preset-button").forEach((button) => {
+  button.addEventListener("click", () => applyQuickPreset(button.dataset.quickPreset));
+});
+
+profileSelect.addEventListener("change", () => {
+  syncProfileText();
+  schedulePreviewRefresh();
+});
+
 qualityInput.addEventListener("input", syncControlText);
 gammaInput.addEventListener("input", syncControlText);
 
@@ -384,27 +732,131 @@ dropZone.addEventListener("drop", async (event) => {
   syncFiles(files);
 });
 
-previewButton.addEventListener("click", async () => {
+const selectPreviewFile = (index, load = true) => {
+  if (index < 0 || index >= selectedFiles.length) return;
+  activePreviewFileIndex = index;
+  resetPreviewPage();
+  renderSelectedFiles();
+  if (load) generateSourcePreview();
+};
+
+const renderPreviewSourceControls = () => {
+  previewSourceBar.hidden = !selectedFiles.length;
+  previewSourceSelect.replaceChildren();
+  if (!selectedFiles.length) {
+    previewPageInput.value = "1";
+    setPreviewBusy(false);
+    return;
+  }
+  currentPreviewFile();
+  selectedFiles.forEach((file, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `${index + 1}. ${displayFileName(file)}`;
+    previewSourceSelect.append(option);
+  });
+  previewSourceSelect.value = String(activePreviewFileIndex);
+  previewPageInput.value = String(activePreviewPage + 1);
+  if (activePreviewPageCount !== null) {
+    previewPageInput.max = String(activePreviewPageCount);
+  } else {
+    previewPageInput.removeAttribute("max");
+  }
+  prevSourcePageButton.disabled = activePreviewPage <= 0;
+  nextSourcePageButton.disabled = activePreviewPageCount !== null && activePreviewPage >= activePreviewPageCount - 1;
+};
+
+const schedulePreviewRefresh = () => {
+  clearTimeout(previewAutoTimer);
+  if (!selectedFiles.length) return;
+  previewAutoTimer = setTimeout(() => generateSourcePreview({ silent: true }), 350);
+};
+
+const selectedPreviewItems = (data) =>
+  data.previews || (data.images || []).map((src) => ({ src, label: "Prévia", detail: "" }));
+
+const generateSourcePreview = async ({ silent = false } = {}) => {
+  const file = currentPreviewFile();
+  if (!file) {
+    renderPreview([]);
+    return false;
+  }
+  clearTimeout(previewAutoTimer);
+  const requestId = ++previewRequestId;
   try {
-    const payload = buildPayload(true);
-    setBusy(true);
-    setStatus("working", "Gerando prévia", selectedFiles[0].name);
+    const payload = buildPayload([file], { previewPage: activePreviewPage });
+    setPreviewBusy(true);
+    renderPreviewSourceControls();
+    if (!silent) {
+      setStatus("working", "Gerando prévia", `${displayFileName(file)} · página ${activePreviewPage + 1}`);
+    }
     const response = await fetch("/api/preview", { method: "POST", body: payload });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Prévia falhou.");
-    renderPreview(data.previews || (data.images || []).map((src) => ({ src, label: "Prévia", detail: "" })));
-    setStatus("done", "Prévia pronta", `${previewItems.length} imagem(ns) processada(s).`);
+    if (requestId !== previewRequestId) return false;
+    activePreviewPageCount = Number.isFinite(Number(data.pageCount)) && Number(data.pageCount) > 0 ? Number(data.pageCount) : null;
+    renderPreview(selectedPreviewItems(data), "after");
+    renderPreviewSourceControls();
+    if (!silent) {
+      const total = activePreviewPageCount ? ` de ${activePreviewPageCount}` : "";
+      setStatus("done", "Prévia pronta", `${displayFileName(file)} · página ${activePreviewPage + 1}${total}`);
+    }
+    return true;
   } catch (error) {
-    setStatus("error", "Falhou", error.message || "Não foi possível gerar prévia.");
+    if (requestId !== previewRequestId) return false;
+    setStatus("error", "Prévia falhou", error.message || "Não foi possível gerar prévia.");
+    return false;
   } finally {
-    setBusy(false);
+    if (requestId === previewRequestId) setPreviewBusy(false);
   }
+};
+
+const setPreviewPage = async (pageIndex) => {
+  const previous = activePreviewPage;
+  activePreviewPage = Math.max(0, pageIndex);
+  renderPreviewSourceControls();
+  const ok = await generateSourcePreview();
+  if (!ok) {
+    activePreviewPage = previous;
+    renderPreviewSourceControls();
+  }
+};
+
+previewButton.addEventListener("click", async () => {
+  await generateSourcePreview();
+});
+
+previewSourceSelect.addEventListener("change", () => {
+  selectPreviewFile(Number(previewSourceSelect.value));
+});
+
+loadPreviewButton.addEventListener("click", () => {
+  setPreviewPage(Number(previewPageInput.value || 1) - 1);
+});
+
+previewPageInput.addEventListener("change", () => {
+  setPreviewPage(Number(previewPageInput.value || 1) - 1);
+});
+
+previewPageInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  setPreviewPage(Number(previewPageInput.value || 1) - 1);
+});
+
+prevSourcePageButton.addEventListener("click", () => {
+  if (activePreviewPage <= 0) return;
+  setPreviewPage(activePreviewPage - 1);
+});
+
+nextSourcePageButton.addEventListener("click", () => {
+  setPreviewPage(activePreviewPage + 1);
 });
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const payload = buildPayload(false);
+    const payload = buildPayload(selectedFiles);
     setBusy(true);
     startProgress();
     setStatus("working", "Convertendo", selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles.length} arquivos`);
@@ -417,7 +869,7 @@ form.addEventListener("submit", async (event) => {
     stopProgress();
     await loadHistory();
   } catch (error) {
-    stopProgress();
+    failProgress();
     setStatus("error", "Falhou", error.message || "Não foi possível converter.");
   } finally {
     setBusy(false);
@@ -464,10 +916,12 @@ const filesFromEntry = (entry) =>
     read();
   });
 
-const renderPreview = (items) => {
+const renderPreview = (items, preferredKind = "") => {
   previewItems = items || [];
-  previewIndex = 0;
+  const preferredIndex = preferredKind ? previewItems.findIndex((item) => item.kind === preferredKind) : -1;
+  previewIndex = preferredIndex >= 0 ? preferredIndex : 0;
   previewZoomed = false;
+  zoomPreviewButton.textContent = "Zoom";
   renderPreviewPage();
 };
 
@@ -484,8 +938,11 @@ const renderPreviewPage = () => {
     return;
   }
   const item = previewItems[previewIndex];
-  previewTitle.textContent = `${item.label || "Prévia"} — Página ${previewIndex + 1} de ${previewItems.length}`;
-  previewDetail.textContent = item.detail || `${item.width || 1072} x ${item.height || 1448}`;
+  const file = currentPreviewFile();
+  const fileLabelText = file ? ` — ${displayFileName(file)}` : "";
+  const viewCount = previewItems.length > 1 ? ` · visão ${previewIndex + 1}/${previewItems.length}` : "";
+  previewTitle.textContent = `${item.label || "Prévia"}${fileLabelText}`;
+  previewDetail.textContent = `${item.detail || `${item.width || 1072} x ${item.height || 1448}`}${viewCount}`;
   const image = document.createElement("img");
   image.src = item.src;
   image.alt = item.label || "Prévia processada";
@@ -513,6 +970,7 @@ zoomPreviewButton.addEventListener("click", () => {
 const renderMetadata = (items) => {
   metadataResults.hidden = false;
   metadataResults.replaceChildren();
+  selectedMetadataKey = "";
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "message-box";
@@ -520,39 +978,72 @@ const renderMetadata = (items) => {
     metadataResults.append(empty);
     return;
   }
-  items.forEach((item) => {
+  items.forEach((item, index) => {
     const card = document.createElement("div");
     const confidence = Number(item.confidence || 0);
+    const key = metadataKey(item, index);
     card.className = `metadata-card ${confidence < 55 ? "low-confidence" : ""}`;
+    card.dataset.key = key;
+    card.addEventListener("click", () => markMetadataSelection(key));
 
     const cover = document.createElement("img");
     cover.className = "metadata-cover";
-    cover.alt = "";
+    cover.alt = item.cover_url ? `Capa de ${item.title || "resultado"}` : "";
     cover.src = item.cover_url || "";
 
     const text = document.createElement("div");
+    text.className = "metadata-copy";
+    if (index === 0 && confidence >= 65) {
+      const recommended = document.createElement("span");
+      recommended.className = "metadata-badge";
+      recommended.textContent = "Recomendado";
+      text.append(recommended);
+    }
     const title = document.createElement("strong");
     title.textContent = item.title || "Sem título";
     const meta = document.createElement("span");
-    meta.textContent = [item.author, item.year, item.source].filter(Boolean).join(" · ");
+    meta.textContent = [item.author, item.year, item.language, item.source].filter(Boolean).join(" · ");
     const description = document.createElement("span");
-    description.textContent = item.description ? item.description.slice(0, 150) : "";
+    description.textContent = item.description ? item.description.slice(0, 180) : "Sem descrição nessa fonte.";
     const tag = document.createElement("span");
     tag.className = `confidence-tag ${confidence < 55 ? "low" : ""}`;
     tag.textContent = confidence ? `${confidence}% confiança` : "Sem score";
+    const meter = document.createElement("span");
+    meter.className = "confidence-meter";
+    meter.innerHTML = `<i style="width: ${Math.max(4, Math.min(100, confidence || 0))}%"></i>`;
     const warning = document.createElement("span");
+    warning.className = "metadata-warning";
     warning.textContent = item.warning || "";
-    text.append(title, meta, description, tag, warning);
+    text.append(title, meta, description, tag, meter, warning);
 
     const actions = document.createElement("div");
     actions.className = "item-actions";
-    const allButton = metadataAction("Tudo", () => applyMetadata(item, "all"));
-    const coverButton = metadataAction("Só capa", () => applyMetadata(item, "cover"));
-    const descButton = metadataAction("Só descrição", () => applyMetadata(item, "description"));
+    const allButton = metadataAction("Aplicar tudo", () => applyMetadata(item, "all", key));
+    const coverButton = metadataAction("Capa", () => applyMetadata(item, "cover", key));
+    const descButton = metadataAction("Descrição", () => applyMetadata(item, "description", key));
     actions.append(allButton, coverButton, descButton);
+    if (item.external_url) {
+      const sourceLink = document.createElement("a");
+      sourceLink.href = item.external_url;
+      sourceLink.target = "_blank";
+      sourceLink.rel = "noreferrer";
+      sourceLink.textContent = "Fonte";
+      sourceLink.addEventListener("click", (event) => event.stopPropagation());
+      actions.append(sourceLink);
+    }
 
     card.append(cover, text, actions);
     metadataResults.append(card);
+  });
+  markMetadataSelection(metadataKey(items[0], 0));
+};
+
+const metadataKey = (item, index) => `${index}:${item.source || ""}:${item.title || ""}:${item.year || ""}`;
+
+const markMetadataSelection = (key) => {
+  selectedMetadataKey = key;
+  metadataResults.querySelectorAll(".metadata-card").forEach((card) => {
+    card.classList.toggle("selected", card.dataset.key === selectedMetadataKey);
   });
 };
 
@@ -560,11 +1051,15 @@ const metadataAction = (label, handler) => {
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = label;
-  button.addEventListener("click", handler);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    handler();
+  });
   return button;
 };
 
-const applyMetadata = (item, mode) => {
+const applyMetadata = (item, mode, key = "") => {
+  if (key) markMetadataSelection(key);
   if (mode === "all") {
     titleInput.value = item.title || titleInput.value;
     form.elements.author.value = item.author || form.elements.author.value;
@@ -607,6 +1102,8 @@ const resultNode = (item) => {
   io.className = "io-summary";
   const inputSize = item.input ? formatBytes(item.input.size) : "";
   const outputSize = item.outputSize ? formatBytes(item.outputSize) : "";
+  const targetLabel = item.profile?.label || "Leitor selecionado";
+  const targetResolution = item.profile?.resolution ? ` · ${item.profile.resolution.replace("x", " x ")}` : "";
   io.innerHTML = `
     <div class="io-box">
       <span class="eyebrow">Entrada</span>
@@ -616,12 +1113,12 @@ const resultNode = (item) => {
     <div class="io-box">
       <span class="eyebrow">Saída</span>
       <strong>${item.files?.[0]?.name || "Arquivo convertido"}</strong>
-      <span>${outputSize} · Otimizado para Kindle Basic 11</span>
+      <span>${outputSize} · Otimizado para ${targetLabel}${targetResolution}</span>
     </div>
   `;
   const tags = document.createElement("div");
   tags.className = "status-tags";
-  [item.mode, "Kindle Basic 11", `${item.pages} páginas`, item.split ? "partes" : "único"].forEach((value) => {
+  [item.mode, targetLabel, `${item.pages} páginas`, item.split ? "partes" : "único"].forEach((value) => {
     const tag = document.createElement("span");
     tag.className = "status-tag";
     tag.textContent = value;
@@ -734,6 +1231,7 @@ deleteFilesButton.addEventListener("click", async () => {
     deleteFilesButton.disabled = false;
   }
 });
+buildProfileOptions();
 syncFiles([]);
 syncControlText();
 renderPreview([]);

@@ -10,7 +10,7 @@
     <main class="app-shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Kindle Basic 11</p>
+          <p class="eyebrow">E-readers e tablets</p>
           <h1>Kindle Forge</h1>
         </div>
         <div class="top-actions">
@@ -18,7 +18,7 @@
           <button id="openRootButton" class="icon-button" type="button" title="Abrir pasta de saida">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
           </button>
-          <div class="profile-pill">1072 x 1448</div>
+          <div id="profilePill" class="profile-pill">Kindle Basic 11 · 1072 x 1448</div>
         </div>
       </header>
 
@@ -58,17 +58,50 @@
             <div class="section-head compact">
               <div>
                 <p class="eyebrow">Presets</p>
-                <h2>Tipo de leitura</h2>
+                <h2>Leitura e dispositivo</h2>
               </div>
             </div>
+            <label class="reader-field">
+              <span>Leitor de ebook de destino</span>
+              <select id="profileSelect" name="profile"></select>
+            </label>
+            <div id="profileInfo" class="reader-info" aria-live="polite"></div>
+            <div class="preset-subhead">
+              <span>Tipo de material</span>
+              <small>Escolhe corte, cor, direção de leitura e tratamento de imagem.</small>
+            </div>
             <div class="preset-grid">
-              <button type="button" class="preset-button active" data-preset="manga">Mangá P&B</button>
-              <button type="button" class="preset-button" data-preset="comic">HQ colorida</button>
-              <button type="button" class="preset-button" data-preset="webtoon">Webtoon vertical</button>
-              <button type="button" class="preset-button" data-preset="pdf">Scan/PDF</button>
-              <button type="button" class="preset-button" data-preset="quality">Qualidade máxima</button>
-              <button type="button" class="preset-button" data-preset="light">Tamanho reduzido</button>
-              <button type="button" class="preset-button" data-preset="auto">Detectar automaticamente</button>
+              <button type="button" class="preset-button active" data-preset="manga"><strong>Mangá P&B</strong><span>Direita → esquerda</span></button>
+              <button type="button" class="preset-button" data-preset="mangaTone"><strong>Mangá retícula</strong><span>Preserva tons</span></button>
+              <button type="button" class="preset-button" data-preset="mangaColor"><strong>Mangá colorido</strong><span>Volumes especiais</span></button>
+              <button type="button" class="preset-button" data-preset="comic"><strong>HQ e comics</strong><span>Splashes e páginas duplas</span></button>
+              <button type="button" class="preset-button" data-preset="comicColor"><strong>HQ colorida</strong><span>Para tablet/Fire</span></button>
+              <button type="button" class="preset-button" data-preset="bd"><strong>BD europeu</strong><span>Páginas grandes</span></button>
+              <button type="button" class="preset-button" data-preset="webtoon"><strong>Manhwa/Webtoon</strong><span>Vertical em fatias</span></button>
+              <button type="button" class="preset-button" data-preset="manhua"><strong>Manhua</strong><span>Leitura esquerda → direita</span></button>
+              <button type="button" class="preset-button" data-preset="lightNovel"><strong>Light novel</strong><span>Texto e ilustrações</span></button>
+              <button type="button" class="preset-button" data-preset="novel"><strong>Romance/livro</strong><span>PDF de texto</span></button>
+              <button type="button" class="preset-button" data-preset="bookScan"><strong>Livro escaneado</strong><span>Páginas amareladas</span></button>
+              <button type="button" class="preset-button" data-preset="illustratedBook"><strong>Livro ilustrado</strong><span>Texto com imagens</span></button>
+              <button type="button" class="preset-button" data-preset="pdfScan"><strong>Scan/PDF</strong><span>Clareia fundo</span></button>
+              <button type="button" class="preset-button" data-preset="pdfText"><strong>PDF texto</strong><span>Margem mais limpa</span></button>
+              <button type="button" class="preset-button" data-preset="textbook"><strong>Apostila/técnico</strong><span>Diagramas e tabelas</span></button>
+              <button type="button" class="preset-button" data-preset="magazine"><strong>Revista</strong><span>Cor e colunas</span></button>
+              <button type="button" class="preset-button" data-preset="artbook"><strong>Artbook</strong><span>Preserva arte</span></button>
+              <button type="button" class="preset-button" data-preset="photoBook"><strong>Fotos/catálogo</strong><span>Imagem limpa</span></button>
+              <button type="button" class="preset-button" data-preset="auto"><strong>Detectar</strong><span>Escolha automática</span></button>
+            </div>
+            <div class="preset-subhead">
+              <span>Ajustes rápidos</span>
+              <small>Refina qualidade, tamanho e visual sem trocar o tipo de leitura.</small>
+            </div>
+            <div class="quick-preset-grid">
+              <button type="button" class="quick-preset-button" data-quick-preset="quality">Qualidade máxima</button>
+              <button type="button" class="quick-preset-button" data-quick-preset="light">Arquivo leve</button>
+              <button type="button" class="quick-preset-button" data-quick-preset="eink">E-ink forte</button>
+              <button type="button" class="quick-preset-button" data-quick-preset="soft">Cinza suave</button>
+              <button type="button" class="quick-preset-button" data-quick-preset="color">Manter cor</button>
+              <button type="button" class="quick-preset-button" data-quick-preset="send">Send to Kindle</button>
             </div>
             <input id="modeInput" name="mode" type="hidden" value="manga" />
           </section>
@@ -224,6 +257,21 @@
                   <button id="zoomPreviewButton" type="button" title="Zoom">Zoom</button>
                   <button id="nextPreviewButton" type="button" title="Próxima página">›</button>
                 </div>
+              </div>
+              <div id="previewSourceBar" class="preview-source-bar" hidden>
+                <label>
+                  <span>Capítulo/arquivo</span>
+                  <select id="previewSourceSelect"></select>
+                </label>
+                <label class="preview-page-field">
+                  <span>Página</span>
+                  <div class="preview-page-controls">
+                    <button id="prevSourcePageButton" type="button" title="Página anterior">-</button>
+                    <input id="previewPageInput" type="number" min="1" value="1" />
+                    <button id="nextSourcePageButton" type="button" title="Próxima página">+</button>
+                  </div>
+                </label>
+                <button id="loadPreviewButton" class="secondary-button small-button" type="button">Ver página</button>
               </div>
               <div id="previewGrid" class="preview-grid">
                 <div class="kindle-frame">

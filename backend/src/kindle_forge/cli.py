@@ -13,7 +13,7 @@ from .sources import SourceError
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kindle-forge",
-        description="Convert comics, manga, manhwa and PDFs for Kindle Basic 11th generation.",
+        description="Convert comics, manga, manhwa and PDFs for e-readers and tablets.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
