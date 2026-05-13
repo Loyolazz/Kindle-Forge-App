@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +20,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from zipfile import ZipFile
 
-from .converter import ConvertRequest, convert, detect_mode
+from .converter import ConvertRequest, convert, detect_mode, filename_title_with_volume
 from .covers import BookMetadata, make_generated_cover, prepare_cover_image
 from .images import IMAGE_EXTENSIONS, ImageOptions, is_image_path, process_image
 from .metadata import clean_query, download_cover, search_metadata
@@ -35,6 +36,20 @@ OUTPUT_ROOT = PROJECT_ROOT / "backend" / "dist" / "web"
 HISTORY_PATH = OUTPUT_ROOT / "history.json"
 DOCUMENT_EXTENSIONS = ARCHIVE_EXTENSIONS | {".pdf"}
 SUPPORTED_EXTENSIONS = DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS
+SEND_TO_KINDLE_LIMIT_MB = 200
+SEND_TO_KINDLE_LIMIT_BYTES = SEND_TO_KINDLE_LIMIT_MB * 1_000_000
+SEND_TO_KINDLE_BUFFER_BYTES = 1_000_000
+MAX_TOTAL_ATTACHMENTS = 2500
+MAX_PDF_ATTACHMENTS = 120
+MAX_IMAGE_ATTACHMENTS = 2000
+
+
+@dataclass(frozen=True)
+class PdfMergeResult:
+    outputs: list[Path]
+    page_count: int
+    split: bool
+    max_size_mb: int
 
 
 class KindleForgeHandler(SimpleHTTPRequestHandler):
@@ -50,7 +65,7 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
                 {
                     "ok": True,
                     "version": self.server_version,
-                    "endpoints": ["/api/history/clear", "/api/history/delete-files"],
+                    "endpoints": ["/api/merge-pdfs", "/api/history/clear", "/api/history/delete-files"],
                 }
             )
             return
@@ -76,6 +91,9 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/preview":
             self._handle_preview()
             return
+        if parsed.path == "/api/merge-pdfs":
+            self._handle_merge_pdfs()
+            return
         if parsed.path == "/api/history/clear":
             self._handle_clear_history()
             return
@@ -91,6 +109,7 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
             if not file_items:
                 self._send_json({"error": "Escolha um arquivo ou pasta para converter."}, HTTPStatus.BAD_REQUEST)
                 return
+            _validate_attachment_limits([_upload_name(item) for item in file_items])
 
             profile = get_profile(_field(form, "profile", "kindle11"))
             profile_label = _field(form, "profileLabel", profile.label).strip() or profile.label
@@ -187,6 +206,63 @@ class KindleForgeHandler(SimpleHTTPRequestHandler):
             if len(results) == 1:
                 payload.update(results[0])
             self._send_json(payload)
+        except (SourceError, ValueError, RuntimeError) as exc:
+            self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:  # pragma: no cover - last-resort API guard
+            traceback.print_exc()
+            self._send_json({"error": f"Falha inesperada: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_merge_pdfs(self) -> None:
+        try:
+            form = _read_form(self)
+            file_items = _file_items(form, "file")
+            if len(file_items) < 2:
+                self._send_json({"error": "Escolha pelo menos dois PDFs para mesclar."}, HTTPStatus.BAD_REQUEST)
+                return
+            _validate_attachment_limits([_upload_name(item) for item in file_items])
+            non_pdf = [Path(_upload_name(item)).name for item in file_items if Path(_upload_name(item)).suffix.lower() != ".pdf"]
+            if non_pdf:
+                names = ", ".join(non_pdf[:3])
+                extra = "..." if len(non_pdf) > 3 else ""
+                self._send_json({"error": f"Mesclagem aceita apenas PDF. Remova: {names}{extra}"}, HTTPStatus.BAD_REQUEST)
+                return
+
+            title = _field(form, "title", "").strip() or _guess_group_title(file_items)
+            series = _field(form, "series", "").strip()
+            volume = _field(form, "volume", "").strip()
+            max_size_mb = _send_to_kindle_split_mb(_int_field(form, "splitSizeMb", SEND_TO_KINDLE_LIMIT_MB))
+            job_id = _collection_id(series, title, volume)
+            job_dir = OUTPUT_ROOT / job_id
+            source_dir = job_dir / "original"
+            source_dir.mkdir(parents=True, exist_ok=True)
+
+            with tempfile.TemporaryDirectory(prefix="kindle-forge-merge-") as temp:
+                input_root = _save_group(file_items, Path(temp) / "pdfs")
+                input_paths = _saved_paths_for_group(input_root)
+                base_name = slugify(filename_title_with_volume(title, volume), "PDF-Mesclado")
+                output_path = _unique_file_path(source_dir / f"{base_name}-mesclado.pdf")
+                result = _merge_pdf_files(input_paths, output_path, max_size_mb=max_size_mb)
+            _save_group(file_items, source_dir)
+
+            files = [_file_payload(job_id, output) for output in result.outputs]
+            item = {
+                "kind": "merge-pdf",
+                "jobId": job_id,
+                "title": title,
+                "mode": "PDF mesclado seguro",
+                "pages": result.page_count,
+                "split": result.split,
+                "limitMb": result.max_size_mb,
+                "sendToKindleSafe": all(file["size"] <= SEND_TO_KINDLE_LIMIT_BYTES for file in files),
+                "files": files,
+                "input": _input_payload(file_items),
+                "outputSize": sum(file["size"] for file in files),
+                "outputUrl": f"/api/open-output?job={quote(job_id, safe='')}",
+                "createdAt": _now(),
+                "status": "done",
+            }
+            _append_history(item)
+            self._send_json(item)
         except (SourceError, ValueError, RuntimeError) as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # pragma: no cover - last-resort API guard
@@ -409,6 +485,17 @@ def _input_groups(items: list[cgi.FieldStorage], group_mode: str) -> list[list[c
     return [[item] for item in sorted(usable, key=lambda item: natural_key(_upload_name(item)))]
 
 
+def _validate_attachment_limits(names: list[str]) -> None:
+    if len(names) > MAX_TOTAL_ATTACHMENTS:
+        raise ValueError(f"Limite de anexos: envie no máximo {MAX_TOTAL_ATTACHMENTS} arquivos por vez.")
+    pdf_count = sum(1 for name in names if Path(name).suffix.lower() == ".pdf")
+    image_count = sum(1 for name in names if Path(name).suffix.lower() in IMAGE_EXTENSIONS)
+    if pdf_count > MAX_PDF_ATTACHMENTS:
+        raise ValueError(f"Limite de PDFs: envie no máximo {MAX_PDF_ATTACHMENTS} PDFs por vez.")
+    if image_count > MAX_IMAGE_ATTACHMENTS:
+        raise ValueError(f"Limite de imagens: envie no máximo {MAX_IMAGE_ATTACHMENTS} imagens por vez.")
+
+
 def _title_for_group(form: cgi.FieldStorage, group: list[cgi.FieldStorage], group_index: int, group_count: int) -> str:
     requested = _field(form, "title", "").strip()
     if requested and group_count == 1:
@@ -429,6 +516,12 @@ def _save_group(group: list[cgi.FieldStorage], source_dir: Path) -> Path:
         target = _unique_file_path(target)
         _write_upload(item, target)
     return source_dir
+
+
+def _saved_paths_for_group(input_root: Path) -> list[Path]:
+    if input_root.is_file():
+        return [input_root]
+    return sorted((path for path in input_root.iterdir() if path.is_file()), key=lambda path: natural_key(path.name))
 
 
 def _save_cover(item: cgi.FieldStorage, output_dir: Path) -> Path:
@@ -686,6 +779,164 @@ def _unique_file_path(target: Path) -> Path:
         if not candidate.exists():
             return candidate
         index += 1
+
+
+def _send_to_kindle_split_mb(requested_mb: int) -> int:
+    if requested_mb <= 0:
+        return SEND_TO_KINDLE_LIMIT_MB
+    return min(requested_mb, SEND_TO_KINDLE_LIMIT_MB)
+
+
+def _send_to_kindle_max_bytes(max_size_mb: int) -> int:
+    requested_bytes = max(1, max_size_mb) * 1_000_000
+    capped_bytes = min(requested_bytes, SEND_TO_KINDLE_LIMIT_BYTES)
+    if capped_bytes > SEND_TO_KINDLE_BUFFER_BYTES:
+        return capped_bytes - SEND_TO_KINDLE_BUFFER_BYTES
+    return capped_bytes
+
+
+def _merge_pdf_files(input_paths: list[Path], output_path: Path, max_size_mb: int = SEND_TO_KINDLE_LIMIT_MB) -> PdfMergeResult:
+    if len(input_paths) < 2:
+        raise ValueError("Escolha pelo menos dois PDFs para mesclar.")
+    try:
+        import fitz  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("Mesclar PDF precisa do PyMuPDF. Rode: python3 -m pip install PyMuPDF") from exc
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    max_size_mb = _send_to_kindle_split_mb(max_size_mb)
+    max_bytes = _send_to_kindle_max_bytes(max_size_mb)
+    outputs: list[Path] = []
+    current = fitz.open()
+    page_count = 0
+
+    with tempfile.TemporaryDirectory(prefix="kindle-forge-pdf-size-") as temp:
+        size_probe = Path(temp) / "probe.pdf"
+
+        def finish_part():
+            nonlocal current
+            if not current.page_count:
+                return current
+            part_path = _unique_file_path(_pdf_part_path(output_path, len(outputs) + 1))
+            _save_pdf_document(current, part_path)
+            if part_path.stat().st_size > max_bytes:
+                raise ValueError(
+                    f"A parte {len(outputs) + 1} ficou com {_format_size(part_path.stat().st_size)}, acima do limite seguro de {max_size_mb} MB."
+                )
+            outputs.append(part_path)
+            current.close()
+            current = fitz.open()
+            return current
+
+        try:
+            for input_path in input_paths:
+                document = fitz.open(input_path)
+                try:
+                    if document.needs_pass:
+                        raise ValueError(f"O PDF '{input_path.name}' está protegido por senha.")
+                    if not document.page_count:
+                        continue
+                    candidate = _clone_pdf_document(current)
+                    candidate.insert_pdf(document)
+                    candidate_size = _pdf_document_size(candidate, size_probe)
+                    candidate.close()
+                    if candidate_size <= max_bytes:
+                        current.insert_pdf(document)
+                        page_count += int(document.page_count)
+                        continue
+                    if current.page_count:
+                        finish_part()
+                    if _single_pdf_fits(document, size_probe, max_bytes):
+                        current.insert_pdf(document)
+                        page_count += int(document.page_count)
+                        continue
+                    added_pages, current = _append_pdf_pages_with_limit(
+                        document,
+                        current,
+                        finish_part,
+                        size_probe,
+                        max_bytes,
+                        max_size_mb,
+                        input_path.name,
+                    )
+                    page_count += added_pages
+                finally:
+                    document.close()
+            finish_part()
+        finally:
+            current.close()
+
+    if not outputs:
+        raise ValueError("Os PDFs escolhidos não têm páginas legíveis.")
+    if len(outputs) == 1:
+        final_path = _unique_file_path(output_path)
+        outputs[0].replace(final_path)
+        outputs = [final_path]
+    return PdfMergeResult(outputs=outputs, page_count=page_count, split=len(outputs) > 1, max_size_mb=max_size_mb)
+
+
+def _append_pdf_pages_with_limit(document, current, finish_part, size_probe: Path, max_bytes: int, max_size_mb: int, name: str):
+    added_pages = 0
+    for page_index in range(document.page_count):
+        candidate = _clone_pdf_document(current)
+        candidate.insert_pdf(document, from_page=page_index, to_page=page_index)
+        candidate_size = _pdf_document_size(candidate, size_probe)
+        candidate.close()
+        if candidate_size > max_bytes:
+            if current.page_count:
+                current = finish_part()
+                candidate = _clone_pdf_document(current)
+                candidate.insert_pdf(document, from_page=page_index, to_page=page_index)
+                candidate_size = _pdf_document_size(candidate, size_probe)
+                candidate.close()
+            if candidate_size > max_bytes:
+                raise ValueError(
+                    f"A página {page_index + 1} de '{name}' sozinha ficou com {_format_size(candidate_size)}, acima do limite seguro de {max_size_mb} MB."
+                )
+        current.insert_pdf(document, from_page=page_index, to_page=page_index)
+        added_pages += 1
+    return added_pages, current
+
+
+def _clone_pdf_document(document):
+    try:
+        import fitz  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - checked before callers reach this
+        raise RuntimeError("Mesclar PDF precisa do PyMuPDF. Rode: python3 -m pip install PyMuPDF") from exc
+    clone = fitz.open()
+    if document.page_count:
+        clone.insert_pdf(document)
+    return clone
+
+
+def _single_pdf_fits(document, size_probe: Path, max_bytes: int) -> bool:
+    candidate = _clone_pdf_document(document)
+    try:
+        return _pdf_document_size(candidate, size_probe) <= max_bytes
+    finally:
+        candidate.close()
+
+
+def _pdf_part_path(output_path: Path, index: int) -> Path:
+    return output_path.with_name(f"{output_path.stem}-Parte-{index:02d}{output_path.suffix}")
+
+
+def _pdf_document_size(document, probe_path: Path) -> int:
+    if probe_path.exists():
+        probe_path.unlink()
+    _save_pdf_document(document, probe_path)
+    return probe_path.stat().st_size
+
+
+def _save_pdf_document(document, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+    document.save(output_path, garbage=4, deflate=True)
+
+
+def _format_size(size: int) -> str:
+    return f"{size / 1_000_000:.1f} MB"
 
 
 def _open_path(target: Path) -> None:

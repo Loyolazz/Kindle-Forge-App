@@ -69,6 +69,12 @@ let progressTimer = null;
 let progressIndex = 0;
 let progressState = "idle";
 
+const attachmentLimits = {
+  total: 2500,
+  pdf: 120,
+  image: 2000,
+};
+
 const progressSteps = [
   {
     title: "Recebendo arquivos",
@@ -257,6 +263,9 @@ const friendlyApiError = (data, fallback) => {
 const setBusy = (busy) => {
   convertButton.disabled = busy;
   previewButton.disabled = busy;
+  sortFilesButton.disabled = busy;
+  reverseFilesButton.disabled = busy;
+  mergePdfsButton.disabled = busy;
   loadPreviewButton.disabled = busy;
   prevSourcePageButton.disabled = busy || activePreviewPage <= 0;
   nextSourcePageButton.disabled = busy || (activePreviewPageCount !== null && activePreviewPage >= activePreviewPageCount - 1);
@@ -361,6 +370,10 @@ const checkedField = (name) => form.querySelector(`input[name="${name}"]`);
 
 const displayFileName = (file) => file?.webkitRelativePath || file?.name || "";
 
+const isPdfFile = (file) => /\.pdf$/i.test(displayFileName(file));
+
+const isImageFile = (file) => /\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(displayFileName(file));
+
 const currentPreviewFile = () => {
   if (!selectedFiles.length) return null;
   activePreviewFileIndex = Math.min(Math.max(activePreviewFileIndex, 0), selectedFiles.length - 1);
@@ -373,7 +386,8 @@ const resetPreviewPage = () => {
 };
 
 const syncFiles = (files) => {
-  selectedFiles = [...files].filter((file) => file.name);
+  const limited = limitAttachedFiles([...files].filter((file) => file.name));
+  selectedFiles = limited.files;
   activePreviewFileIndex = 0;
   resetPreviewPage();
   renderSelectedFiles();
@@ -383,22 +397,28 @@ const syncFiles = (files) => {
   if (selectedFiles.length > 1 && !titleInput.value.trim()) {
     titleInput.value = guessCollectionTitle(selectedFiles);
   }
+  if (limited.skipped.total || limited.skipped.pdf || limited.skipped.image) {
+    setStatus("done", "Limite aplicado", attachmentLimitMessage(limited));
+  }
   schedulePreviewRefresh();
 };
 
 const renderSelectedFiles = () => {
   if (!selectedFiles.length) {
     fileLabel.textContent = "Arraste arquivos, CBR/CBZ/PDF ou uma pasta";
-    fileMeta.textContent = "Mangás, HQs, manhwas, PDFs e imagens";
+    fileMeta.textContent = `Até ${attachmentLimits.pdf} PDFs ou ${attachmentLimits.image} imagens por vez`;
     fileList.hidden = true;
     fileOrderTools.hidden = true;
+    mergePdfsButton.disabled = true;
     fileList.replaceChildren();
     renderPreviewSourceControls();
     return;
   }
   const total = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+  const pdfCount = selectedFiles.filter(isPdfFile).length;
+  const imageCount = selectedFiles.filter(isImageFile).length;
   fileLabel.textContent = selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles.length} arquivos selecionados`;
-  fileMeta.textContent = formatBytes(total);
+  fileMeta.textContent = `${formatBytes(total)} · ${pdfCount} PDF(s) · ${imageCount} imagem(ns)`;
   fileList.hidden = false;
   fileOrderTools.hidden = selectedFiles.length < 2;
   fileList.replaceChildren();
@@ -439,7 +459,47 @@ const renderSelectedFiles = () => {
     chip.append(indexNode, nameNode, sizeNode, controls);
     fileList.append(chip);
   });
+  const canMergePdfs = selectedFiles.length >= 2 && selectedFiles.every(isPdfFile);
+  mergePdfsButton.disabled = !canMergePdfs;
+  mergePdfsButton.title = canMergePdfs ? "Mesclar PDFs na ordem visual" : "Selecione pelo menos dois PDFs";
   renderPreviewSourceControls();
+};
+
+const limitAttachedFiles = (files) => {
+  const result = {
+    files: [],
+    skipped: { total: 0, pdf: 0, image: 0 },
+    counts: { total: 0, pdf: 0, image: 0 },
+  };
+  files.forEach((file) => {
+    const isPdf = isPdfFile(file);
+    const isImage = isImageFile(file);
+    if (result.files.length >= attachmentLimits.total) {
+      result.skipped.total += 1;
+      return;
+    }
+    if (isPdf && result.counts.pdf >= attachmentLimits.pdf) {
+      result.skipped.pdf += 1;
+      return;
+    }
+    if (isImage && result.counts.image >= attachmentLimits.image) {
+      result.skipped.image += 1;
+      return;
+    }
+    result.files.push(file);
+    result.counts.total += 1;
+    if (isPdf) result.counts.pdf += 1;
+    if (isImage) result.counts.image += 1;
+  });
+  return result;
+};
+
+const attachmentLimitMessage = (limited) => {
+  const skipped = [];
+  if (limited.skipped.pdf) skipped.push(`${limited.skipped.pdf} PDF(s)`);
+  if (limited.skipped.image) skipped.push(`${limited.skipped.image} imagem(ns)`);
+  if (limited.skipped.total) skipped.push(`${limited.skipped.total} arquivo(s) acima do limite total`);
+  return `Foram anexados ${limited.files.length} arquivo(s). Ignorado: ${skipped.join(", ")}.`;
 };
 
 const moveFile = (from, to) => {
@@ -535,10 +595,8 @@ reverseFilesButton.addEventListener("click", () => {
   schedulePreviewRefresh();
 });
 
-mergePdfsButton.addEventListener("click", () => {
-  form.querySelector('input[name="groupMode"][value="volume"]').checked = true;
-  checkedField("format").checked = true;
-  setStatus("done", "Mesclagem ativada", "A conversão vai seguir a ordem visual da lista.");
+mergePdfsButton.addEventListener("click", async () => {
+  await mergeSelectedPdfs();
 });
 
 const guessCollectionTitle = (files) => {
@@ -640,14 +698,16 @@ const syncProfileText = () => {
   `;
 };
 
-const buildPayload = (files = selectedFiles, extras = {}) => {
-  const formats = selectedFormats();
-  if (!formats.length) throw new Error("Marque pelo menos um formato.");
+const buildPayload = (files = selectedFiles, extras = {}, options = {}) => {
   if (!files.length) throw new Error("Escolha arquivos ou uma pasta.");
   const payload = new FormData(form);
   payload.delete("file");
   payload.delete("format");
-  payload.append("format", formats.join(","));
+  if (!options.skipFormats) {
+    const formats = selectedFormats();
+    if (!formats.length) throw new Error("Marque pelo menos um formato.");
+    payload.append("format", formats.join(","));
+  }
   payload.set("profile", profileSelect.value || "kindle11");
   payload.set("profileLabel", deviceProfiles[profileSelect.value]?.name || "Leitor selecionado");
   files.forEach((file) => payload.append("file", file, file.webkitRelativePath || file.name));
@@ -658,6 +718,52 @@ const buildPayload = (files = selectedFiles, extras = {}) => {
     payload.append("coverFile", coverInput.files[0], coverInput.files[0].name);
   }
   return payload;
+};
+
+const mergeSelectedPdfs = async () => {
+  if (selectedFiles.length < 2) {
+    setStatus("error", "Poucos PDFs", "Escolha pelo menos dois PDFs para mesclar.");
+    return;
+  }
+  if (!selectedFiles.every(isPdfFile)) {
+    setStatus("error", "Só PDFs", "Remova CBR, CBZ, imagens ou outros formatos antes de mesclar.");
+    return;
+  }
+  try {
+    const originalCount = selectedFiles.length;
+    const payload = buildPayload(selectedFiles, {}, { skipFormats: true });
+    setBusy(true);
+    mergePdfsButton.textContent = "Mesclando";
+    setStatus("working", "Mesclando PDFs", "Usando a ordem visual da lista.");
+    resultList.hidden = true;
+    resultList.replaceChildren();
+    const response = await fetch("/api/merge-pdfs", { method: "POST", body: payload });
+    const data = await response.json();
+    if (!response.ok) throw new Error(friendlyApiError(data, "Não consegui mesclar os PDFs."));
+    renderResults([data]);
+    const mergedFiles = [];
+    for (const merged of data.files || []) {
+      if (merged?.url) {
+        const fileResponse = await fetch(merged.url);
+        if (fileResponse.ok) {
+          const blob = await fileResponse.blob();
+          mergedFiles.push(new File([blob], merged.name, { type: "application/pdf" }));
+        }
+      }
+    }
+    if (mergedFiles.length) syncFiles(mergedFiles);
+    form.querySelector('input[name="groupMode"][value="batch"]').checked = true;
+    const resultCount = data.files?.length || mergedFiles.length || 1;
+    const resultText = resultCount > 1 ? `${resultCount} partes abaixo de ${data.limitMb || 200} MB` : "1 PDF";
+    setStatus("done", "PDFs mesclados", `${originalCount} PDFs viraram ${resultText}.`);
+    await loadHistory();
+  } catch (error) {
+    setStatus("error", "Mesclagem falhou", error.message || "Não foi possível mesclar os PDFs.");
+  } finally {
+    setBusy(false);
+    mergePdfsButton.textContent = "Mesclar PDFs";
+    renderSelectedFiles();
+  }
 };
 
 fileInput.addEventListener("change", () => syncFiles(fileInput.files));
@@ -1091,11 +1197,13 @@ const renderResults = (items) => {
 const resultNode = (item) => {
   const node = document.createElement("div");
   node.className = "result-item";
+  const isMerge = item.kind === "merge-pdf";
   const splitText = item.split ? " dividido em partes" : "";
+  const modeText = item.mode || (isMerge ? "PDF mesclado" : "Convertido");
   node.innerHTML = `
     <div class="result-head">
       <strong>${item.title}</strong>
-      <span>${item.pages} pág. · ${item.mode}${splitText}</span>
+      <span>${item.pages} pág. · ${modeText}${splitText}</span>
     </div>
   `;
   const io = document.createElement("div");
@@ -1104,6 +1212,10 @@ const resultNode = (item) => {
   const outputSize = item.outputSize ? formatBytes(item.outputSize) : "";
   const targetLabel = item.profile?.label || "Leitor selecionado";
   const targetResolution = item.profile?.resolution ? ` · ${item.profile.resolution.replace("x", " x ")}` : "";
+  const mergeDetail = item.split
+    ? `${outputSize} · dividido para Send to Kindle`
+    : `${outputSize} · PDF mesclado na ordem visual`;
+  const outputDetail = isMerge ? mergeDetail : `${outputSize} · Otimizado para ${targetLabel}${targetResolution}`;
   io.innerHTML = `
     <div class="io-box">
       <span class="eyebrow">Entrada</span>
@@ -1113,12 +1225,15 @@ const resultNode = (item) => {
     <div class="io-box">
       <span class="eyebrow">Saída</span>
       <strong>${item.files?.[0]?.name || "Arquivo convertido"}</strong>
-      <span>${outputSize} · Otimizado para ${targetLabel}${targetResolution}</span>
+      <span>${outputDetail}</span>
     </div>
   `;
   const tags = document.createElement("div");
   tags.className = "status-tags";
-  [item.mode, targetLabel, `${item.pages} páginas`, item.split ? "partes" : "único"].forEach((value) => {
+  const tagValues = isMerge
+    ? ["PDF mesclado", item.sendToKindleSafe ? `≤ ${item.limitMb || 200} MB` : "ver tamanho", `${item.files?.length || 1} arquivo(s)`, `${item.pages} páginas`]
+    : [item.mode, targetLabel, `${item.pages} páginas`, item.split ? "partes" : "único"];
+  tagValues.forEach((value) => {
     const tag = document.createElement("span");
     tag.className = "status-tag";
     tag.textContent = value;

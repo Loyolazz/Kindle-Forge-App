@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+
+from PIL import Image
 
 from kindle_forge import server
 
@@ -45,6 +48,70 @@ class ServerOutputLayoutTests(unittest.TestCase):
                 self.assertEqual(payload["url"], "/download/Serie/epub%2FVolume-01.epub")
             finally:
                 server.OUTPUT_ROOT = original_output_root
+
+    def test_attachment_limits_reject_too_many_pdfs(self) -> None:
+        names = [f"capitulo-{index:03d}.pdf" for index in range(server.MAX_PDF_ATTACHMENTS + 1)]
+
+        with self.assertRaisesRegex(ValueError, "Limite de PDFs"):
+            server._validate_attachment_limits(names)
+
+    def test_attachment_limits_reject_too_many_images(self) -> None:
+        names = [f"pagina-{index:04d}.jpg" for index in range(server.MAX_IMAGE_ATTACHMENTS + 1)]
+
+        with self.assertRaisesRegex(ValueError, "Limite de imagens"):
+            server._validate_attachment_limits(names)
+
+    def test_merge_pdf_files_creates_output_and_page_count(self) -> None:
+        try:
+            import fitz  # type: ignore[import-not-found]
+        except ImportError:
+            self.skipTest("PyMuPDF não está instalado")
+
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            first = tmp_path / "001.pdf"
+            second = tmp_path / "002.pdf"
+            output = tmp_path / "merged.pdf"
+            Image.new("RGB", (80, 120), "white").save(first, "PDF")
+            Image.new("RGB", (90, 130), "gray").save(second, "PDF")
+
+            result = server._merge_pdf_files([first, second], output)
+
+            self.assertEqual(result.page_count, 2)
+            self.assertEqual(result.outputs, [output])
+            self.assertFalse(result.split)
+            merged = fitz.open(result.outputs[0])
+            try:
+                self.assertEqual(merged.page_count, 2)
+            finally:
+                merged.close()
+
+    def test_merge_pdf_files_splits_to_send_to_kindle_limit(self) -> None:
+        try:
+            import fitz  # type: ignore[import-not-found]
+        except ImportError:
+            self.skipTest("PyMuPDF não está instalado")
+
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            first = tmp_path / "001.pdf"
+            second = tmp_path / "002.pdf"
+            output = tmp_path / "merged.pdf"
+            Image.frombytes("RGB", (1200, 1200), os.urandom(1200 * 1200 * 3)).save(first, "PDF")
+            Image.frombytes("RGB", (1200, 1200), os.urandom(1200 * 1200 * 3)).save(second, "PDF")
+
+            result = server._merge_pdf_files([first, second], output, max_size_mb=1)
+
+            self.assertEqual(result.page_count, 2)
+            self.assertTrue(result.split)
+            self.assertEqual(len(result.outputs), 2)
+            self.assertTrue(all(path.stat().st_size <= server._send_to_kindle_max_bytes(1) for path in result.outputs))
+            for path in result.outputs:
+                merged = fitz.open(path)
+                try:
+                    self.assertEqual(merged.page_count, 1)
+                finally:
+                    merged.close()
 
 
 if __name__ == "__main__":
